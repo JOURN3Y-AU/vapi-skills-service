@@ -22,7 +22,8 @@ from app.skills import skill_registry
 from app.skills.voice_notes import VoiceNotesSkill
 from app.skills.authentication import AuthenticationSkill
 from app.skills.site_updates import SiteUpdatesSkill
-from app.assistants import GreeterAssistant, JillVoiceNotesAssistant, SiteProgressAssistant
+from app.skills.timesheet import TimesheetSkill
+from app.assistants import GreeterAssistant, JillVoiceNotesAssistant, SiteProgressAssistant, TimesheetAssistant
 
 # Load environment variables from .env file
 load_dotenv()
@@ -51,6 +52,9 @@ if os.getenv("VAPI_API_KEY"):
     site_updates_skill = SiteUpdatesSkill()
     skill_registry.register_skill(site_updates_skill)
 
+    timesheet_skill = TimesheetSkill()
+    skill_registry.register_skill(timesheet_skill)
+
     # Register Assistants
     greeter_assistant = GreeterAssistant()
     skill_registry.register_assistant(greeter_assistant)
@@ -60,6 +64,9 @@ if os.getenv("VAPI_API_KEY"):
 
     site_progress_assistant = SiteProgressAssistant()
     skill_registry.register_assistant(site_progress_assistant)
+
+    timesheet_assistant = TimesheetAssistant()
+    skill_registry.register_assistant(timesheet_assistant)
 
     # Register all skill routes with the app
     skill_registry.register_all_routes(app)

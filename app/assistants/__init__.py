@@ -8,5 +8,6 @@ from .base_assistant import BaseAssistant
 from .greeter import GreeterAssistant
 from .jill_voice_notes import JillVoiceNotesAssistant
 from .site_progress import SiteProgressAssistant
+from .timesheet import TimesheetAssistant
 
-__all__ = ['BaseAssistant', 'GreeterAssistant', 'JillVoiceNotesAssistant', 'SiteProgressAssistant']
+__all__ = ['BaseAssistant', 'GreeterAssistant', 'JillVoiceNotesAssistant', 'SiteProgressAssistant', 'TimesheetAssistant']
