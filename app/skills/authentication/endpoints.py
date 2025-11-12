@@ -6,9 +6,11 @@ Handles authentication-related webhook endpoints for VAPI.
 
 from fastapi import APIRouter, HTTPException
 from typing import Dict, Any, Optional
+from datetime import datetime
 import logging
 import httpx
 import os
+import pytz
 
 from app.vapi_utils import extract_vapi_args
 from app.config import settings
@@ -173,6 +175,40 @@ async def authenticate_by_phone(request: dict):
                     "vapi_assistant_id": skill.get('vapi_assistant_id')
                 })
 
+            # Get tenant timezone
+            tenant_response = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/tenants",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params={
+                    "id": f"eq.{user['tenant_id']}",
+                    "select": "timezone"
+                }
+            )
+
+            tenant_timezone_str = 'Australia/Sydney'  # Default fallback
+            if tenant_response.status_code == 200 and tenant_response.json():
+                tenant_timezone_str = tenant_response.json()[0].get('timezone', 'Australia/Sydney')
+
+            # Calculate current date/time in tenant's timezone
+            tenant_tz = pytz.timezone(tenant_timezone_str)
+            current_time_in_tz = datetime.now(tenant_tz)
+
+            # Format date/time for response
+            current_date = current_time_in_tz.strftime('%Y-%m-%d')
+            current_time = current_time_in_tz.strftime('%H:%M')
+            day_of_week = current_time_in_tz.strftime('%A')
+
+            # Format display string (e.g., "Tuesday, 12th November 2025")
+            day = current_time_in_tz.day
+            if 11 <= day <= 13:
+                suffix = 'th'
+            else:
+                suffix = {1: 'st', 2: 'nd', 3: 'rd'}.get(day % 10, 'th')
+            current_datetime_display = current_time_in_tz.strftime(f'%A, {day}{suffix} %B %Y')
+
             # Get all active sites for this tenant
             sites_response = await client.get(
                 f"{settings.SUPABASE_URL}/rest/v1/entities",
@@ -229,6 +265,11 @@ async def authenticate_by_phone(request: dict):
                     "user_role": user.get('role'),
                     "tenant_name": user['tenants']['name'],
                     "tenant_id": user['tenant_id'],
+                    "tenant_timezone": tenant_timezone_str,
+                    "current_date": current_date,
+                    "current_time": current_time,
+                    "current_datetime": current_datetime_display,
+                    "day_of_week": day_of_week,
                     "auth_success": True,
                     "available_skills": available_skills,
                     "available_sites": available_sites,
@@ -248,6 +289,11 @@ async def authenticate_by_phone(request: dict):
                         "user_role": user.get('role', 'user'),
                         "tenant_id": user['tenant_id'],
                         "tenant_name": user['tenants']['name'],
+                        "tenant_timezone": tenant_timezone_str,
+                        "current_date": current_date,
+                        "current_time": current_time,
+                        "current_datetime": current_datetime_display,
+                        "day_of_week": day_of_week,
                         "phone_number": user['phone_number'],
                         "greeting_message": greeting,
                         "available_skills": available_skills,

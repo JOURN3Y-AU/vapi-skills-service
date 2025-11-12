@@ -317,8 +317,9 @@ async def save_timesheet_entry(request: dict):
         end_time = args.get("end_time")
         work_description = args.get("work_description")
         plans_for_tomorrow = args.get("plans_for_tomorrow", "")
+        work_date_arg = args.get("work_date")  # Optional - for historical entries
 
-        logger.info(f"Saving timesheet entry. Call: {vapi_call_id}, Site: {site_id}")
+        logger.info(f"Saving timesheet entry. Call: {vapi_call_id}, Site: {site_id}, Date: {work_date_arg or 'today'}")
 
         # Get session context
         session_context = await get_session_context_by_call_id(vapi_call_id)
@@ -338,9 +339,20 @@ async def save_timesheet_entry(request: dict):
         # Calculate hours worked
         hours_worked = calculate_hours_worked(start_time, end_time)
 
-        # Get today's date in Sydney time
-        sydney_now = datetime.now(SYDNEY_TZ)
-        work_date = sydney_now.date()
+        # Determine work_date: use provided date or default to current_date from session
+        if work_date_arg:
+            # Use the date provided by the assistant (for historical entries)
+            work_date_str = work_date_arg
+        else:
+            # Default to current_date from authentication (tenant timezone aware)
+            work_date_str = session_context.get("current_date")
+            if not work_date_str:
+                # Fallback to Sydney time if not in session (backwards compatibility)
+                tenant_timezone = session_context.get("tenant_timezone", "Australia/Sydney")
+                tz = pytz.timezone(tenant_timezone)
+                work_date_str = datetime.now(tz).strftime('%Y-%m-%d')
+
+        work_date = work_date_str
 
         # Create timesheet entry
         timesheet_entry = {
@@ -349,7 +361,7 @@ async def save_timesheet_entry(request: dict):
             "user_id": session_context["user_id"],
             "tenant_id": session_context["tenant_id"],
             "vapi_call_id": vapi_call_id,
-            "work_date": work_date.isoformat(),
+            "work_date": work_date,  # Already in ISO format (YYYY-MM-DD)
             "start_time": start_time,
             "end_time": end_time,
             "hours_worked": hours_worked,
@@ -510,6 +522,443 @@ async def confirm_and_save_all(request: dict):
                 "result": {
                     "success": True,
                     "message": "Your timesheet has been saved. Have a great day!"
+                }
+            }]
+        }
+
+
+@router.post("/api/v1/skills/timesheet/get-recent-timesheets")
+async def get_recent_timesheets(request: dict):
+    """
+    Get summary of recently logged timesheets for the user
+
+    Used when user asks "what have I logged this week?" or for proactive checking
+    Returns brief summary of dates with timesheets in last N days
+    """
+    try:
+        tool_call_id, args = extract_vapi_args(request)
+
+        vapi_call_id = None
+        if "message" in request and "call" in request["message"]:
+            vapi_call_id = request["message"]["call"]["id"]
+
+        if not vapi_call_id:
+            vapi_call_id = tool_call_id
+
+        days_back = args.get("days_back", 14)  # Default 2 weeks
+
+        logger.info(f"Getting recent timesheets. Call: {vapi_call_id}, days_back: {days_back}")
+
+        session_context = await get_session_context_by_call_id(vapi_call_id)
+
+        if not session_context:
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "has_timesheets": False,
+                        "message": "I couldn't find your session. Please try again."
+                    }
+                }]
+            }
+
+        user_id = session_context["user_id"]
+        tenant_timezone = session_context.get("tenant_timezone", "Australia/Sydney")
+        current_date = session_context.get("current_date")
+
+        # Calculate date range
+        from datetime import timedelta
+        tz = pytz.timezone(tenant_timezone)
+        end_date = datetime.strptime(current_date, '%Y-%m-%d')
+        start_date = end_date - timedelta(days=days_back - 1)
+
+        async with httpx.AsyncClient() as client:
+            # Get timesheets grouped by date
+            response = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/timesheets",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "work_date": f"gte.{start_date.strftime('%Y-%m-%d')}",
+                    "select": "work_date,hours_worked,site_id,entities!inner(name)",
+                    "order": "work_date.desc"
+                }
+            )
+
+            if response.status_code != 200:
+                logger.error(f"Failed to fetch timesheets: {response.status_code}")
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "has_timesheets": False,
+                            "message": "I couldn't retrieve your timesheet history."
+                        }
+                    }]
+                }
+
+            timesheets = response.json()
+
+            if not timesheets:
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "has_timesheets": False,
+                            "days_checked": days_back,
+                            "message": f"You haven't logged any timesheets in the last {days_back} days."
+                        }
+                    }]
+                }
+
+            # Group by date
+            from collections import defaultdict
+            dates_summary = defaultdict(lambda: {"count": 0, "total_hours": 0.0, "sites": []})
+
+            for entry in timesheets:
+                work_date = entry['work_date']
+                site_name = entry['entities']['name']
+                hours = float(entry['hours_worked'])
+
+                dates_summary[work_date]["count"] += 1
+                dates_summary[work_date]["total_hours"] += hours
+                dates_summary[work_date]["sites"].append(site_name)
+
+            # Format for response - convert to day names
+            logged_days = []
+            for work_date_str in sorted(dates_summary.keys(), reverse=True):
+                work_date_obj = datetime.strptime(work_date_str, '%Y-%m-%d')
+                day_name = work_date_obj.strftime('%A')
+
+                # Calculate days ago
+                days_ago = (end_date - work_date_obj).days
+
+                if days_ago == 0:
+                    day_label = "today"
+                elif days_ago == 1:
+                    day_label = "yesterday"
+                else:
+                    day_label = day_name
+
+                logged_days.append({
+                    "date": work_date_str,
+                    "day_label": day_label,
+                    "days_ago": days_ago,
+                    "site_count": dates_summary[work_date_str]["count"],
+                    "total_hours": dates_summary[work_date_str]["total_hours"],
+                    "sites": dates_summary[work_date_str]["sites"]
+                })
+
+            # Create natural language summary
+            if len(logged_days) == 1:
+                summary = f"You've logged time for {logged_days[0]['day_label']}"
+            elif len(logged_days) == 2:
+                summary = f"You've logged time for {logged_days[0]['day_label']} and {logged_days[1]['day_label']}"
+            else:
+                day_labels = [d['day_label'] for d in logged_days[:3]]  # First 3
+                if len(logged_days) > 3:
+                    summary = f"You've logged time for {', '.join(day_labels)}, and {len(logged_days) - 3} other day(s)"
+                else:
+                    summary = f"You've logged time for {', '.join(day_labels[:-1])}, and {day_labels[-1]}"
+
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "has_timesheets": True,
+                        "days_checked": days_back,
+                        "total_days_logged": len(logged_days),
+                        "logged_days": logged_days,
+                        "summary": summary,
+                        "message": summary + "."
+                    }
+                }]
+            }
+
+    except Exception as e:
+        logger.error(f"Error in get_recent_timesheets: {str(e)}", exc_info=True)
+        return {
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": {
+                    "has_timesheets": False,
+                    "error": str(e),
+                    "message": "I had trouble checking your timesheet history. Let's continue anyway."
+                }
+            }]
+        }
+
+@router.post("/api/v1/skills/timesheet/check-date-conflicts")
+async def check_date_for_conflicts(request: dict):
+    """
+    Check if timesheets already exist for a specific date
+    
+    Returns existing entries for that date to detect conflicts
+    Used before logging historical timesheets
+    """
+    try:
+        tool_call_id, args = extract_vapi_args(request)
+        
+        vapi_call_id = None
+        if "message" in request and "call" in request["message"]:
+            vapi_call_id = request["message"]["call"]["id"]
+        
+        if not vapi_call_id:
+            vapi_call_id = tool_call_id
+        
+        work_date = args.get("work_date")  # ISO format YYYY-MM-DD
+        site_id = args.get("site_id")  # Optional - check specific site
+        
+        if not work_date:
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "has_conflicts": False,
+                        "error": "work_date is required",
+                        "message": "I need a date to check for existing timesheets."
+                    }
+                }]
+            }
+        
+        logger.info(f"Checking conflicts for date: {work_date}, site: {site_id}, call: {vapi_call_id}")
+        
+        session_context = await get_session_context_by_call_id(vapi_call_id)
+        
+        if not session_context:
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "has_conflicts": False,
+                        "message": "I couldn't find your session."
+                    }
+                }]
+            }
+        
+        user_id = session_context["user_id"]
+        
+        async with httpx.AsyncClient() as client:
+            # Build query params
+            params = {
+                "user_id": f"eq.{user_id}",
+                "work_date": f"eq.{work_date}",
+                "select": "id,site_id,start_time,end_time,hours_worked,work_description,entities!inner(name)",
+                "order": "start_time.asc"
+            }
+            
+            # Optionally filter by site
+            if site_id:
+                params["site_id"] = f"eq.{site_id}"
+            
+            response = await client.get(
+                f"{settings.SUPABASE_URL}/rest/v1/timesheets",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                },
+                params=params
+            )
+            
+            if response.status_code != 200:
+                logger.error(f"Failed to check conflicts: {response.status_code}")
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "has_conflicts": False,
+                            "message": "I couldn't check for existing timesheets."
+                        }
+                    }]
+                }
+            
+            existing_entries = response.json()
+            
+            if not existing_entries:
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "has_conflicts": False,
+                            "work_date": work_date,
+                            "message": f"No existing timesheets found for {work_date}."
+                        }
+                    }]
+                }
+            
+            # Format existing entries for assistant
+            entries_summary = []
+            total_hours = 0.0
+            
+            for entry in existing_entries:
+                site_name = entry['entities']['name']
+                start_time = entry['start_time']
+                end_time = entry['end_time']
+                hours = float(entry['hours_worked'])
+                total_hours += hours
+                
+                entries_summary.append({
+                    "timesheet_id": entry['id'],
+                    "site_id": entry['site_id'],
+                    "site_name": site_name,
+                    "start_time": start_time,
+                    "end_time": end_time,
+                    "hours_worked": hours,
+                    "work_description": entry.get('work_description', '')
+                })
+            
+            # Create natural language summary
+            if len(entries_summary) == 1:
+                entry = entries_summary[0]
+                summary = f"{entry['site_name']}, {entry['hours_worked']} hours ({entry['start_time']} to {entry['end_time']})"
+            else:
+                site_names = [e['site_name'] for e in entries_summary]
+                summary = f"{len(entries_summary)} entries: {', '.join(set(site_names))}, total {total_hours} hours"
+            
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "has_conflicts": True,
+                        "work_date": work_date,
+                        "entry_count": len(entries_summary),
+                        "total_hours": total_hours,
+                        "existing_entries": entries_summary,
+                        "summary": summary,
+                        "message": f"I already have {summary} logged for {work_date}."
+                    }
+                }]
+            }
+    
+    except Exception as e:
+        logger.error(f"Error in check_date_for_conflicts: {str(e)}", exc_info=True)
+        return {
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": {
+                    "has_conflicts": False,
+                    "error": str(e),
+                    "message": "I had trouble checking for existing entries. Let's continue anyway."
+                }
+            }]
+        }
+
+
+@router.post("/api/v1/skills/timesheet/update-entry")
+async def update_timesheet_entry(request: dict):
+    """
+    Update an existing timesheet entry
+    
+    Used when user wants to correct/overwrite an existing entry
+    """
+    try:
+        tool_call_id, args = extract_vapi_args(request)
+        
+        vapi_call_id = None
+        if "message" in request and "call" in request["message"]:
+            vapi_call_id = request["message"]["call"]["id"]
+        
+        if not vapi_call_id:
+            vapi_call_id = tool_call_id
+        
+        timesheet_id = args.get("timesheet_id")
+        start_time = args.get("start_time")  # HH:MM format
+        end_time = args.get("end_time")  # HH:MM format
+        work_description = args.get("work_description", "")
+        plans_for_tomorrow = args.get("plans_for_tomorrow", "")
+        
+        if not timesheet_id:
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "success": False,
+                        "error": "timesheet_id is required",
+                        "message": "I need the timesheet ID to update."
+                    }
+                }]
+            }
+        
+        if not start_time or not end_time:
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "success": False,
+                        "error": "start_time and end_time are required",
+                        "message": "I need both start and end times to update the entry."
+                    }
+                }]
+            }
+        
+        logger.info(f"Updating timesheet {timesheet_id}: {start_time}-{end_time}")
+        
+        # Calculate hours worked
+        hours_worked = calculate_hours_worked(start_time, end_time)
+        
+        async with httpx.AsyncClient() as client:
+            # Update the entry
+            update_data = {
+                "start_time": start_time,
+                "end_time": end_time,
+                "hours_worked": hours_worked,
+                "work_description": work_description,
+                "plans_for_tomorrow": plans_for_tomorrow
+            }
+            
+            response = await client.patch(
+                f"{settings.SUPABASE_URL}/rest/v1/timesheets",
+                headers={
+                    "apikey": settings.SUPABASE_SERVICE_KEY,
+                    "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation"
+                },
+                params={"id": f"eq.{timesheet_id}"},
+                json=update_data
+            )
+            
+            if response.status_code not in (200, 204):
+                logger.error(f"Failed to update timesheet: {response.status_code} - {response.text}")
+                return {
+                    "results": [{
+                        "toolCallId": tool_call_id,
+                        "result": {
+                            "success": False,
+                            "error": f"Database error: {response.status_code}",
+                            "message": "I had trouble updating that timesheet entry."
+                        }
+                    }]
+                }
+            
+            updated_entry = response.json()[0] if response.json() else {}
+            
+            return {
+                "results": [{
+                    "toolCallId": tool_call_id,
+                    "result": {
+                        "success": True,
+                        "timesheet_id": timesheet_id,
+                        "hours_worked": hours_worked,
+                        "start_time": start_time,
+                        "end_time": end_time,
+                        "message": f"Updated! That's now {hours_worked} hours from {start_time} to {end_time}."
+                    }
+                }]
+            }
+    
+    except Exception as e:
+        logger.error(f"Error in update_timesheet_entry: {str(e)}", exc_info=True)
+        return {
+            "results": [{
+                "toolCallId": tool_call_id,
+                "result": {
+                    "success": False,
+                    "error": str(e),
+                    "message": "I had trouble updating that entry."
                 }
             }]
         }
