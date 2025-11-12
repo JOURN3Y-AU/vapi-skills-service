@@ -35,7 +35,7 @@ class TimesheetAssistant(BaseAssistant):
 
     def get_first_message(self) -> str:
         """The greeting message Jill speaks first"""
-        return "Perfect! Let me help you log your time. Let's start with the first site you want to log time for. Don't worry if there's more than one site - we'll cover that off next. Which site did you work at today? I can list your sites if that helps."
+        return "Perfect! Ready to log today's timesheet or catch up on any missed days? I can list your sites if that helps."
 
     def get_voice_config(self) -> Dict:
         """Jill's voice configuration using ElevenLabs - consistent across all assistants"""
