@@ -15,6 +15,11 @@
     <!-- Alpine.js -->
     <script defer src="https://cdn.jsdelivr.net/npm/alpinejs@3.13.5/dist/cdn.min.js"></script>
 
+    <!-- Google Fonts - Manrope -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@200..800&display=swap" rel="stylesheet">
+
     <!-- Custom CSS -->
     <style>
         [x-cloak] { display: none !important; }
@@ -67,8 +72,9 @@
         }
     }" x-init="loadTenants()">
         <div class="flex-1">
-            <a href="/admin" class="btn btn-ghost normal-case text-xl">
-                🚀 JOURN3Y Admin
+            <a href="/admin" class="btn btn-ghost normal-case flex items-center gap-2">
+                <img src="/static/images/journ3y-logo.png" alt="JOURN3Y" class="h-8 w-8" />
+                <span style="font-family: 'Manrope', sans-serif; font-weight: 800; font-size: 2rem; line-height: 2rem; letter-spacing: -0.02em;">JOURN<span style="color: #E91E8C;">3</span>Y</span>
             </a>
         </div>
         <div class="flex-none gap-2 flex items-center">
