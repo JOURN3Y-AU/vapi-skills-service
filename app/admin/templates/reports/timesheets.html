@@ -1,0 +1,489 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Timesheet Reports{% endblock %}
+
+{% block content %}
+<div x-data="timesheetReport()" x-init="init()">
+    <!-- Page Header -->
+    <div class="flex justify-between items-center mb-6">
+        <div>
+            <h1 class="text-3xl font-bold">Timesheet Reports</h1>
+            <p class="text-base-content/70 mt-1">View and analyze timesheet entries</p>
+        </div>
+        <button
+            class="btn btn-primary btn-sm"
+            @click="exportCSV()"
+            :disabled="!data || data.entries?.length === 0"
+        >
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4 mr-1" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+            </svg>
+            Export CSV
+        </button>
+    </div>
+
+    <!-- View Switcher -->
+    <div class="tabs tabs-boxed mb-6 bg-base-200">
+        <a
+            class="tab"
+            :class="{ 'tab-active': view === 'all_users' }"
+            @click="switchView('all_users')"
+        >
+            All Users Summary
+        </a>
+        <a
+            class="tab"
+            :class="{ 'tab-active': view === 'individual' }"
+            @click="switchView('individual')"
+        >
+            Individual User
+        </a>
+    </div>
+
+    <!-- Filters -->
+    <div class="card bg-base-100 shadow-lg mb-6">
+        <div class="card-body">
+            <h2 class="card-title text-lg mb-4">Filters</h2>
+
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                <!-- Date Range Presets -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Quick Select</span>
+                    </label>
+                    <select class="select select-bordered select-sm" x-model="datePreset" @change="applyDatePreset()">
+                        <option value="">Custom Range</option>
+                        <option value="today">Today</option>
+                        <option value="this_week">This Week</option>
+                        <option value="last_week">Last Week</option>
+                        <option value="this_month">This Month</option>
+                        <option value="last_month">Last Month</option>
+                    </select>
+                </div>
+
+                <!-- Start Date -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">Start Date</span>
+                    </label>
+                    <input
+                        type="date"
+                        class="input input-bordered input-sm"
+                        x-model="startDate"
+                        @change="datePreset = ''"
+                    />
+                </div>
+
+                <!-- End Date -->
+                <div class="form-control">
+                    <label class="label">
+                        <span class="label-text">End Date</span>
+                    </label>
+                    <input
+                        type="date"
+                        class="input input-bordered input-sm"
+                        x-model="endDate"
+                        @change="datePreset = ''"
+                    />
+                </div>
+
+                <!-- User Select (Individual View Only) -->
+                <div class="form-control" x-show="view === 'individual'" x-cloak>
+                    <label class="label">
+                        <span class="label-text">Select User</span>
+                    </label>
+                    <select class="select select-bordered select-sm" x-model="selectedUserId">
+                        <option value="">All Users</option>
+                        <template x-for="user in users" :key="user.id">
+                            <option :value="user.id" x-text="user.name"></option>
+                        </template>
+                    </select>
+                </div>
+
+                <!-- Site Filter -->
+                <div class="form-control" x-show="sites.length > 0">
+                    <label class="label">
+                        <span class="label-text">Filter by Site</span>
+                    </label>
+                    <select class="select select-bordered select-sm" x-model="selectedSiteId">
+                        <option value="">All Sites</option>
+                        <template x-for="site in sites" :key="site.id">
+                            <option :value="site.id" x-text="site.name"></option>
+                        </template>
+                    </select>
+                </div>
+            </div>
+
+            <!-- Action Buttons -->
+            <div class="card-actions justify-end mt-4">
+                <button class="btn btn-sm btn-ghost" @click="clearFilters()">Clear</button>
+                <button class="btn btn-sm btn-primary" @click="loadData()">Apply Filters</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Loading State -->
+    <div x-show="loading" class="flex justify-center py-12">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- Error State -->
+    <div x-show="error && !loading" class="alert alert-error mb-6" x-cloak>
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" />
+        </svg>
+        <span x-text="error"></span>
+    </div>
+
+    <!-- Summary Stats -->
+    <div x-show="data && !loading" class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6" x-cloak>
+        <div class="stat bg-base-100 shadow-lg rounded-lg">
+            <div class="stat-title">Total Hours</div>
+            <div class="stat-value text-primary" x-text="data?.summary?.total_hours || 0"></div>
+            <div class="stat-desc" x-show="view === 'all_users'" x-text="'Across ' + (data?.summary?.total_users || 0) + ' users'"></div>
+        </div>
+
+        <div class="stat bg-base-100 shadow-lg rounded-lg">
+            <div class="stat-title" x-text="view === 'all_users' ? 'Total Users' : 'Days Worked'"></div>
+            <div class="stat-value text-secondary" x-text="view === 'all_users' ? (data?.summary?.total_users || 0) : (data?.summary?.days_worked || 0)"></div>
+        </div>
+
+        <div class="stat bg-base-100 shadow-lg rounded-lg">
+            <div class="stat-title">Total Entries</div>
+            <div class="stat-value text-accent" x-text="data?.summary?.total_entries || 0"></div>
+        </div>
+
+        <div class="stat bg-base-100 shadow-lg rounded-lg">
+            <div class="stat-title" x-text="view === 'all_users' ? 'Avg Hours/User' : 'Avg Hours/Day'"></div>
+            <div class="stat-value text-info" x-text="view === 'all_users' ? (data?.summary?.avg_hours_per_user || 0) : (data?.summary?.avg_hours_per_day || 0)"></div>
+        </div>
+    </div>
+
+    <!-- All Users View -->
+    <div x-show="view === 'all_users' && data && !loading" x-cloak>
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <h2 class="card-title mb-4">User Summary</h2>
+
+                <!-- Empty State -->
+                <div x-show="!data?.user_summary || data.user_summary.length === 0" class="text-center py-12">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-base-content/30 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p class="text-base-content/70 text-lg">No timesheet entries found</p>
+                    <p class="text-base-content/50 text-sm mt-2">Try adjusting your filters or date range</p>
+                </div>
+
+                <!-- User Summary Table -->
+                <div x-show="data?.user_summary && data.user_summary.length > 0" class="overflow-x-auto">
+                    <table class="table table-zebra">
+                        <thead>
+                            <tr>
+                                <th>User Name</th>
+                                <th>Total Hours</th>
+                                <th>Days Worked</th>
+                                <th>Avg Hours/Day</th>
+                                <th>Entries</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="user in data.user_summary" :key="user.user_id">
+                                <tr>
+                                    <td>
+                                        <div class="font-medium" x-text="user.user_name"></div>
+                                    </td>
+                                    <td>
+                                        <div class="badge badge-lg" :class="getHoursBadgeClass(user.total_hours)" x-text="user.total_hours + ' hrs'"></div>
+                                    </td>
+                                    <td x-text="user.days_worked"></td>
+                                    <td x-text="user.avg_hours_per_day"></td>
+                                    <td x-text="user.entry_count"></td>
+                                    <td>
+                                        <button
+                                            class="btn btn-xs btn-ghost"
+                                            @click="viewUserDetails(user.user_id, user.user_name)"
+                                        >
+                                            View Details
+                                        </button>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Individual User View -->
+    <div x-show="view === 'individual' && data && !loading" x-cloak>
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <h2 class="card-title mb-4">Detailed Entries</h2>
+
+                <!-- Empty State -->
+                <div x-show="!data?.entries || data.entries.length === 0" class="text-center py-12">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-base-content/30 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                    </svg>
+                    <p class="text-base-content/70 text-lg">No timesheet entries found</p>
+                    <p class="text-base-content/50 text-sm mt-2">Try adjusting your filters or date range</p>
+                </div>
+
+                <!-- Entries Table -->
+                <div x-show="data?.entries && data.entries.length > 0" class="overflow-x-auto">
+                    <table class="table table-zebra">
+                        <thead>
+                            <tr>
+                                <th>Date</th>
+                                <th>User</th>
+                                <th>Site</th>
+                                <th>Start Time</th>
+                                <th>End Time</th>
+                                <th>Hours</th>
+                                <th>Description</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <template x-for="entry in data.entries" :key="entry.id">
+                                <tr>
+                                    <td x-text="formatDate(entry.work_date)"></td>
+                                    <td x-text="entry.users?.name || 'Unknown'"></td>
+                                    <td x-text="entry.site_name || 'Unknown Site'"></td>
+                                    <td x-text="entry.start_time"></td>
+                                    <td x-text="entry.end_time"></td>
+                                    <td>
+                                        <div class="badge" :class="getHoursBadgeClass(entry.hours_worked)" x-text="entry.hours_worked + ' hrs'"></div>
+                                    </td>
+                                    <td>
+                                        <div class="max-w-xs truncate" x-text="entry.work_description"></div>
+                                    </td>
+                                </tr>
+                            </template>
+                        </tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+function timesheetReport() {
+    return {
+        view: 'all_users',
+        loading: true,
+        error: null,
+        data: null,
+
+        // Filters
+        datePreset: 'this_week',
+        startDate: '',
+        endDate: '',
+        selectedUserId: '',
+        selectedSiteId: '',
+
+        // Dropdown data
+        users: [],
+        sites: [],
+
+        async init() {
+            // Set default date range to this week (without auto-loading)
+            this.applyDatePreset(false);
+
+            // Load users and sites
+            await this.loadUsers();
+            await this.loadSites();
+
+            // Load initial data once
+            await this.loadData();
+        },
+
+        applyDatePreset(shouldLoad = true) {
+            const today = new Date();
+            const formatDate = (date) => date.toISOString().split('T')[0];
+
+            switch(this.datePreset) {
+                case 'today':
+                    this.startDate = formatDate(today);
+                    this.endDate = formatDate(today);
+                    break;
+                case 'this_week':
+                    const startOfWeek = new Date(today);
+                    startOfWeek.setDate(today.getDate() - today.getDay() + 1); // Monday
+                    this.startDate = formatDate(startOfWeek);
+                    this.endDate = formatDate(today);
+                    break;
+                case 'last_week':
+                    const lastWeekStart = new Date(today);
+                    lastWeekStart.setDate(today.getDate() - today.getDay() - 6); // Last Monday
+                    const lastWeekEnd = new Date(lastWeekStart);
+                    lastWeekEnd.setDate(lastWeekStart.getDate() + 6); // Last Sunday
+                    this.startDate = formatDate(lastWeekStart);
+                    this.endDate = formatDate(lastWeekEnd);
+                    break;
+                case 'this_month':
+                    const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
+                    this.startDate = formatDate(startOfMonth);
+                    this.endDate = formatDate(today);
+                    break;
+                case 'last_month':
+                    const lastMonthStart = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+                    const lastMonthEnd = new Date(today.getFullYear(), today.getMonth(), 0);
+                    this.startDate = formatDate(lastMonthStart);
+                    this.endDate = formatDate(lastMonthEnd);
+                    break;
+            }
+
+            if (this.datePreset && shouldLoad) {
+                this.loadData();
+            }
+        },
+
+        async loadUsers() {
+            try {
+                const headers = {
+                    'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
+                };
+                const tenantId = localStorage.getItem('selected_tenant_id');
+                if (tenantId) {
+                    headers['X-Tenant-ID'] = tenantId;
+                }
+
+                const response = await fetch('/admin/users/data', { headers });
+                const result = await response.json();
+
+                if (result.success) {
+                    this.users = result.users;
+                }
+            } catch (err) {
+                console.error('Error loading users:', err);
+            }
+        },
+
+        async loadSites() {
+            try {
+                const headers = {
+                    'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
+                };
+                const tenantId = localStorage.getItem('selected_tenant_id');
+                if (tenantId) {
+                    headers['X-Tenant-ID'] = tenantId;
+                }
+
+                const response = await fetch('/admin/sites/data', { headers });
+                const result = await response.json();
+
+                if (result.success) {
+                    this.sites = result.sites || [];
+                }
+            } catch (err) {
+                console.error('Error loading sites:', err);
+                this.sites = [];
+            }
+        },
+
+        async loadData() {
+            this.loading = true;
+            this.error = null;
+
+            try {
+                const headers = {
+                    'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
+                };
+                const tenantId = localStorage.getItem('selected_tenant_id');
+                if (tenantId) {
+                    headers['X-Tenant-ID'] = tenantId;
+                }
+
+                // Build query params
+                const params = new URLSearchParams({
+                    view: this.view
+                });
+
+                if (this.startDate) params.append('start_date', this.startDate);
+                if (this.endDate) params.append('end_date', this.endDate);
+                if (this.selectedUserId) params.append('user_id', this.selectedUserId);
+                if (this.selectedSiteId) params.append('site_id', this.selectedSiteId);
+
+                const response = await fetch(`/admin/reports/timesheets/data?${params}`, { headers });
+                const result = await response.json();
+
+                if (result.success) {
+                    this.data = result;
+                } else {
+                    this.error = result.error || 'Failed to load data';
+                }
+            } catch (err) {
+                console.error('Error loading timesheet data:', err);
+                this.error = 'Failed to load timesheet data';
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        switchView(newView) {
+            this.view = newView;
+            this.loadData();
+        },
+
+        clearFilters() {
+            this.datePreset = 'this_week';
+            this.selectedUserId = '';
+            this.selectedSiteId = '';
+            this.applyDatePreset();
+        },
+
+        viewUserDetails(userId, userName) {
+            this.view = 'individual';
+            this.selectedUserId = userId;
+            this.loadData();
+        },
+
+        formatDate(dateStr) {
+            const date = new Date(dateStr);
+            return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+        },
+
+        getHoursBadgeClass(hours) {
+            if (hours >= 7) return 'badge-success';
+            if (hours >= 4) return 'badge-warning';
+            return 'badge-error';
+        },
+
+        exportCSV() {
+            if (!this.data || !this.data.entries || this.data.entries.length === 0) {
+                alert('No data to export');
+                return;
+            }
+
+            let csv = '';
+
+            if (this.view === 'all_users') {
+                // Export user summary
+                csv = 'User Name,Total Hours,Days Worked,Avg Hours/Day,Entries\n';
+                this.data.user_summary.forEach(user => {
+                    csv += `"${user.user_name}",${user.total_hours},${user.days_worked},${user.avg_hours_per_day},${user.entry_count}\n`;
+                });
+            } else {
+                // Export detailed entries
+                csv = 'Date,User,Site,Start Time,End Time,Hours,Description,Plans for Tomorrow\n';
+                this.data.entries.forEach(entry => {
+                    csv += `"${entry.work_date}","${entry.users?.name || 'Unknown'}","${entry.site_name || 'Unknown Site'}","${entry.start_time}","${entry.end_time}",${entry.hours_worked},"${entry.work_description}","${entry.plans_for_tomorrow || ''}"\n`;
+                });
+            }
+
+            // Download
+            const blob = new Blob([csv], { type: 'text/csv' });
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = `timesheets_${this.view}_${this.startDate}_to_${this.endDate}.csv`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+    };
+}
+</script>
+{% endblock %}

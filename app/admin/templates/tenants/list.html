@@ -1,0 +1,139 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Tenant Management{% endblock %}
+
+{% block content %}
+<div x-data="{
+    tenants: [],
+    loading: true,
+    error: null,
+    isAuthenticated: !!localStorage.getItem('admin_api_key'),
+    async loadTenants() {
+        if (!this.isAuthenticated) {
+            this.loading = false;
+            return;
+        }
+
+        try {
+            const headers = {
+                'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
+            };
+
+            // Add tenant ID header if selected (for super admin)
+            const tenantId = localStorage.getItem('selected_tenant_id');
+            if (tenantId) {
+                headers['X-Tenant-ID'] = tenantId;
+            }
+
+            const response = await fetch('/admin/tenants/data', { headers });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success) {
+                    this.tenants = data.tenants;
+                } else {
+                    this.error = data.error || 'Failed to load tenant';
+                }
+            } else if (response.status === 401) {
+                localStorage.removeItem('admin_api_key');
+                window.location.reload();
+            } else {
+                this.error = 'Failed to load tenant';
+            }
+        } catch (err) {
+            this.error = 'Connection error. Please try again.';
+        } finally {
+            this.loading = false;
+        }
+    }
+}" x-init="loadTenants()">
+
+    <!-- Header -->
+    <div class="mb-8">
+        <h1 class="text-4xl font-bold">Tenant Management</h1>
+        <p class="text-base-content/70 mt-2">View and manage tenant configuration</p>
+    </div>
+
+    <!-- Not Authenticated State -->
+    <div x-show="!isAuthenticated" x-cloak class="alert alert-warning">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+        <span>Please login to view tenant information</span>
+    </div>
+
+    <!-- Loading State -->
+    <div x-show="loading && isAuthenticated" class="flex justify-center items-center min-h-[400px]">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- Error State -->
+    <div x-show="error && isAuthenticated" x-cloak class="alert alert-error">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        <span x-text="error"></span>
+    </div>
+
+    <!-- Tenant Info Card -->
+    <template x-if="!loading && !error && isAuthenticated && tenants.length > 0">
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <template x-for="tenant in tenants" :key="tenant.id">
+                    <div>
+                        <h2 class="card-title text-2xl mb-4" x-text="tenant.name"></h2>
+
+                        <div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <!-- Basic Info -->
+                            <div>
+                                <h3 class="font-semibold text-lg mb-3">Basic Information</h3>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="text-sm text-base-content/70">Tenant ID</label>
+                                        <div class="font-mono text-sm bg-base-200 p-2 rounded" x-text="tenant.id"></div>
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-base-content/70">Company Name</label>
+                                        <div class="text-lg" x-text="tenant.name"></div>
+                                    </div>
+                                    <div>
+                                        <label class="text-sm text-base-content/70">Created</label>
+                                        <div x-text="new Date(tenant.created_at).toLocaleDateString()"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- API Key -->
+                            <div>
+                                <h3 class="font-semibold text-lg mb-3">API Configuration</h3>
+                                <div class="space-y-3">
+                                    <div>
+                                        <label class="text-sm text-base-content/70">API Key</label>
+                                        <div class="flex gap-2">
+                                            <div class="font-mono text-sm bg-base-200 p-2 rounded flex-1" x-text="tenant.api_key"></div>
+                                            <button
+                                                class="btn btn-sm"
+                                                @click="navigator.clipboard.writeText(tenant.api_key); $el.textContent = 'Copied!'; setTimeout(() => $el.textContent = 'Copy', 2000)"
+                                            >
+                                                Copy
+                                            </button>
+                                        </div>
+                                        <div class="text-xs text-base-content/50 mt-1">
+                                            Use this key in the Authorization header for API requests
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+
+                        <!-- Warning Box -->
+                        <div class="alert alert-warning mt-6">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+                            <div>
+                                <h3 class="font-bold">Keep your API key secure</h3>
+                                <div class="text-xs">Never share your API key publicly or commit it to version control.</div>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+        </div>
+    </template>
+</div>
+{% endblock %}

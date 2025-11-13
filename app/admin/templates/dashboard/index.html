@@ -1,0 +1,156 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}Dashboard{% endblock %}
+
+{% block content %}
+<div x-data="{
+    stats: null,
+    loading: true,
+    error: null,
+    isAuthenticated: !!localStorage.getItem('admin_api_key'),
+    async loadStats() {
+        if (!this.isAuthenticated) {
+            this.loading = false;
+            return;
+        }
+
+        try {
+            const headers = {
+                'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
+            };
+
+            // Add tenant ID header if selected (for super admin)
+            const tenantId = localStorage.getItem('selected_tenant_id');
+            if (tenantId) {
+                headers['X-Tenant-ID'] = tenantId;
+            }
+
+            const response = await fetch('/admin/dashboard/stats', { headers });
+
+            if (response.ok) {
+                const data = await response.json();
+                this.stats = data;
+            } else if (response.status === 401) {
+                localStorage.removeItem('admin_api_key');
+                window.location.reload();
+            } else {
+                this.error = 'Failed to load dashboard stats';
+            }
+        } catch (err) {
+            this.error = 'Connection error. Please try again.';
+        } finally {
+            this.loading = false;
+        }
+    }
+}" x-init="loadStats()">
+
+    <!-- Header -->
+    <div class="mb-8">
+        <h1 class="text-4xl font-bold">Dashboard</h1>
+        <p class="text-base-content/70 mt-2" x-show="stats" x-text="'Welcome to ' + (stats?.tenant_name || 'Admin Dashboard')"></p>
+    </div>
+
+    <!-- Not Authenticated State -->
+    <div x-show="!isAuthenticated" x-cloak class="flex flex-col items-center justify-center min-h-[400px]">
+        <div class="text-center max-w-md">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-24 w-24 mx-auto text-base-content/30 mb-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+            </svg>
+            <h2 class="text-2xl font-bold mb-4">Authentication Required</h2>
+            <p class="text-base-content/70 mb-6">Please login with your API key to access the admin dashboard.</p>
+            <button class="btn btn-primary" onclick="auth_modal.showModal()">
+                Login Now
+            </button>
+        </div>
+    </div>
+
+    <!-- Loading State -->
+    <div x-show="loading && isAuthenticated" class="flex justify-center items-center min-h-[400px]">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- Error State -->
+    <div x-show="error && isAuthenticated" x-cloak class="alert alert-error">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        <span x-text="error"></span>
+    </div>
+
+    <!-- Stats Cards -->
+    <div x-show="stats && !loading && isAuthenticated" x-cloak>
+        <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
+            <!-- Users Card -->
+            <div class="stat bg-base-100 shadow-lg rounded-box">
+                <div class="stat-figure text-primary">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-8 h-8 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z"></path></svg>
+                </div>
+                <div class="stat-title">Users</div>
+                <div class="stat-value text-primary" x-text="stats?.stats?.users || 0"></div>
+                <div class="stat-desc">Active team members</div>
+                <div class="stat-actions mt-4">
+                    <a href="/admin/users" class="btn btn-sm btn-ghost">View All →</a>
+                </div>
+            </div>
+
+            <!-- Sites Card -->
+            <div class="stat bg-base-100 shadow-lg rounded-box">
+                <div class="stat-figure text-secondary">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-8 h-8 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4"></path></svg>
+                </div>
+                <div class="stat-title">Sites</div>
+                <div class="stat-value text-secondary" x-text="stats?.stats?.sites || 0"></div>
+                <div class="stat-desc">Active construction sites</div>
+                <div class="stat-actions mt-4">
+                    <a href="/admin/sites" class="btn btn-sm btn-ghost">View All →</a>
+                </div>
+            </div>
+
+            <!-- Voice Notes Card -->
+            <div class="stat bg-base-100 shadow-lg rounded-box">
+                <div class="stat-figure text-accent">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-8 h-8 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z"></path></svg>
+                </div>
+                <div class="stat-title">Voice Notes</div>
+                <div class="stat-value text-accent" x-text="stats?.stats?.voice_notes || 0"></div>
+                <div class="stat-desc">Total recordings</div>
+                <div class="stat-actions mt-4">
+                    <a href="/admin/reports/voice-notes" class="btn btn-sm btn-ghost">View Report →</a>
+                </div>
+            </div>
+
+            <!-- Timesheet Entries Card -->
+            <div class="stat bg-base-100 shadow-lg rounded-box">
+                <div class="stat-figure text-info">
+                    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" class="inline-block w-8 h-8 stroke-current"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z"></path></svg>
+                </div>
+                <div class="stat-title">Timesheet Entries</div>
+                <div class="stat-value text-info" x-text="stats?.stats?.timesheet_entries || 0"></div>
+                <div class="stat-desc">Time logs recorded</div>
+                <div class="stat-actions mt-4">
+                    <a href="/admin/reports/timesheets" class="btn btn-sm btn-ghost">View Report →</a>
+                </div>
+            </div>
+        </div>
+
+        <!-- Quick Actions -->
+        <div class="card bg-base-100 shadow-lg">
+            <div class="card-body">
+                <h2 class="card-title">Quick Actions</h2>
+                <div class="flex flex-wrap gap-4 mt-4">
+                    <a href="/admin/users" class="btn btn-outline btn-primary">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4.354a4 4 0 110 5.292M15 21H3v-1a6 6 0 0112 0v1zm0 0h6v-1a6 6 0 00-9-5.197M13 7a4 4 0 11-8 0 4 4 0 018 0z" /></svg>
+                        Manage Users
+                    </a>
+                    <a href="/admin/sites" class="btn btn-outline btn-secondary">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" /></svg>
+                        Manage Sites
+                    </a>
+                    <a href="/admin/reports/timesheets" class="btn btn-outline btn-accent">
+                        <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" /></svg>
+                        View Reports
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

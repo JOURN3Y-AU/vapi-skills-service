@@ -2,6 +2,7 @@
 
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import httpx
@@ -24,6 +25,9 @@ from app.skills.authentication import AuthenticationSkill
 from app.skills.site_updates import SiteUpdatesSkill
 from app.skills.timesheet import TimesheetSkill
 from app.assistants import GreeterAssistant, JillVoiceNotesAssistant, SiteProgressAssistant, TimesheetAssistant
+
+# NEW: Import admin interface
+from app.admin import admin_router
 
 # Load environment variables from .env file
 load_dotenv()
@@ -98,6 +102,26 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+# ============================================
+# ADMIN INTERFACE
+# ============================================
+
+# Include admin router FIRST (before static mount)
+app.include_router(admin_router)
+
+# Mount static files for admin interface LAST (catch-all)
+# Handle case where static directory might not exist in deployment
+try:
+    import os.path
+    static_dir = "app/admin/static"
+    if os.path.exists(static_dir):
+        app.mount("/static", StaticFiles(directory=static_dir), name="static")
+        logger.info(f"✓ Mounted static files from {static_dir}")
+    else:
+        logger.warning(f"⚠ Static directory not found: {static_dir}")
+except Exception as e:
+    logger.error(f"✗ Failed to mount static files: {e}")
 
 
 # ============================================

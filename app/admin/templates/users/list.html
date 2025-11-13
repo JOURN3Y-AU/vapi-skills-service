@@ -1,0 +1,184 @@
+{% extends "layouts/base.html" %}
+
+{% block title %}User Management{% endblock %}
+
+{% block content %}
+<div x-data="{
+    users: [],
+    loading: true,
+    error: null,
+    isAuthenticated: !!localStorage.getItem('admin_api_key'),
+    async loadUsers() {
+        if (!this.isAuthenticated) {
+            this.loading = false;
+            return;
+        }
+
+        try {
+            const headers = {
+                'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
+            };
+
+            // Add tenant ID header if selected (for super admin)
+            const tenantId = localStorage.getItem('selected_tenant_id');
+            if (tenantId) {
+                headers['X-Tenant-ID'] = tenantId;
+            }
+
+            const response = await fetch('/admin/users/data', { headers });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success) {
+                    this.users = data.users;
+                } else {
+                    this.error = data.error || 'Failed to load users';
+                }
+            } else if (response.status === 401) {
+                localStorage.removeItem('admin_api_key');
+                window.location.reload();
+            } else {
+                this.error = 'Failed to load users';
+            }
+        } catch (err) {
+            this.error = 'Connection error. Please try again.';
+        } finally {
+            this.loading = false;
+        }
+    },
+    async toggleActive(userId, index) {
+        try {
+            const headers = {
+                'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
+            };
+
+            // Add tenant ID header if selected (for super admin)
+            const tenantId = localStorage.getItem('selected_tenant_id');
+            if (tenantId) {
+                headers['X-Tenant-ID'] = tenantId;
+            }
+
+            const response = await fetch(`/admin/users/${userId}/toggle-active`, {
+                method: 'POST',
+                headers
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                if (data.success) {
+                    this.users[index].is_active = data.is_active;
+                }
+            }
+        } catch (err) {
+            console.error('Failed to toggle user status:', err);
+        }
+    }
+}" x-init="loadUsers()">
+
+    <!-- Header -->
+    <div class="mb-8 flex justify-between items-center">
+        <div>
+            <h1 class="text-4xl font-bold">User Management</h1>
+            <p class="text-base-content/70 mt-2">Manage your team members and their access</p>
+        </div>
+        <button class="btn btn-primary" disabled>
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+            Add User (Coming Soon)
+        </button>
+    </div>
+
+    <!-- Not Authenticated State -->
+    <div x-show="!isAuthenticated" x-cloak class="alert alert-warning">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
+        <span>Please login to view users</span>
+    </div>
+
+    <!-- Loading State -->
+    <div x-show="loading && isAuthenticated" class="flex justify-center items-center min-h-[400px]">
+        <span class="loading loading-spinner loading-lg"></span>
+    </div>
+
+    <!-- Error State -->
+    <div x-show="error && isAuthenticated" x-cloak class="alert alert-error">
+        <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+        <span x-text="error"></span>
+    </div>
+
+    <!-- Users Table -->
+    <div x-show="!loading && !error && isAuthenticated && users.length > 0" x-cloak class="card bg-base-100 shadow-lg">
+        <div class="card-body">
+            <div class="overflow-x-auto">
+                <table class="table table-zebra">
+                    <thead>
+                        <tr>
+                            <th>Name</th>
+                            <th>Phone Number</th>
+                            <th>Role</th>
+                            <th>Skills</th>
+                            <th>Status</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <template x-for="(user, index) in users" :key="user.id">
+                            <tr>
+                                <td>
+                                    <div class="font-bold" x-text="user.name"></div>
+                                </td>
+                                <td x-text="user.phone_number"></td>
+                                <td>
+                                    <span class="badge badge-ghost" x-text="user.role || 'User'"></span>
+                                </td>
+                                <td>
+                                    <template x-if="user.skills && user.skills.length > 0">
+                                        <div class="flex flex-wrap gap-1">
+                                            <template x-for="skill in user.skills" :key="skill">
+                                                <span class="badge badge-sm badge-primary" x-text="skill"></span>
+                                            </template>
+                                        </div>
+                                    </template>
+                                    <template x-if="!user.skills || user.skills.length === 0">
+                                        <span class="text-base-content/50 text-sm">No skills assigned</span>
+                                    </template>
+                                </td>
+                                <td>
+                                    <span
+                                        class="badge"
+                                        :class="user.is_active ? 'badge-success' : 'badge-error'"
+                                        x-text="user.is_active ? 'Active' : 'Inactive'"
+                                    ></span>
+                                </td>
+                                <td>
+                                    <div class="flex gap-2">
+                                        <button
+                                            class="btn btn-sm"
+                                            :class="user.is_active ? 'btn-error' : 'btn-success'"
+                                            @click="toggleActive(user.id, index)"
+                                        >
+                                            <span x-text="user.is_active ? 'Deactivate' : 'Activate'"></span>
+                                        </button>
+                                        <button class="btn btn-sm btn-ghost" disabled>
+                                            Edit
+                                        </button>
+                                    </div>
+                                </td>
+                            </tr>
+                        </template>
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+
+    <!-- Empty State -->
+    <div x-show="!loading && !error && isAuthenticated && users.length === 0" x-cloak class="card bg-base-100 shadow-lg">
+        <div class="card-body items-center text-center py-12">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-24 w-24 text-base-content/30 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 20h5v-2a3 3 0 00-5.356-1.857M17 20H7m10 0v-2c0-.656-.126-1.283-.356-1.857M7 20H2v-2a3 3 0 015.356-1.857M7 20v-2c0-.656.126-1.283.356-1.857m0 0a5.002 5.002 0 019.288 0M15 7a3 3 0 11-6 0 3 3 0 016 0zm6 3a2 2 0 11-4 0 2 2 0 014 0zM7 10a2 2 0 11-4 0 2 2 0 014 0z" />
+            </svg>
+            <h3 class="text-xl font-bold">No Users Found</h3>
+            <p class="text-base-content/70 mt-2">There are no users in your tenant yet.</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
