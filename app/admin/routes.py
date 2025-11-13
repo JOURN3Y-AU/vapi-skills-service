@@ -782,13 +782,16 @@ async def list_sites_page(request: Request):
 
 @router.get("/admin/sites/data")
 async def get_sites_data(admin_user: dict = Depends(get_current_admin_user)):
-    """Get sites data"""
+    """Get sites data from entities table"""
     tenant_id = admin_user.get("tenant_id")
     is_super_admin = admin_user.get("is_super_admin", False)
 
     try:
         async with httpx.AsyncClient() as client:
-            params = {"select": "id,name,address,tenant_id"}
+            params = {
+                "select": "id,name,address,tenant_id",
+                "entity_type": "eq.sites"  # Filter for sites only
+            }
 
             # Apply tenant filter
             if tenant_id and not is_super_admin:
@@ -797,7 +800,7 @@ async def get_sites_data(admin_user: dict = Depends(get_current_admin_user)):
                 params["tenant_id"] = f"eq.{tenant_id}"
 
             response = await client.get(
-                f"{os.getenv('SUPABASE_URL')}/rest/v1/sites",
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
                 headers={
                     "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
                     "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
@@ -805,10 +808,14 @@ async def get_sites_data(admin_user: dict = Depends(get_current_admin_user)):
                 params=params
             )
 
+            logger.info(f"Fetching sites from entities table: {response.status_code}, params: {params}")
+
             if response.status_code == 200:
                 sites = response.json()
+                logger.info(f"Found {len(sites)} sites")
                 return {"success": True, "sites": sites}
             else:
+                logger.error(f"Failed to fetch sites: {response.status_code} - {response.text}")
                 return {"success": False, "error": "Failed to fetch sites"}
 
     except Exception as e:
@@ -997,6 +1004,152 @@ async def get_timesheets_data(
 
     except Exception as e:
         logger.error(f"Error fetching timesheets: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.get("/admin/reports/timesheets/by-site")
+async def get_timesheets_by_site(
+    site_id: Optional[str] = None,
+    start_date: Optional[str] = None,
+    end_date: Optional[str] = None,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    """Get timesheet data grouped by site"""
+    tenant_id = admin_user.get("tenant_id")
+    is_super_admin = admin_user.get("is_super_admin", False)
+
+    try:
+        async with httpx.AsyncClient() as client:
+            # Build query params
+            params = {
+                "select": "id,work_date,start_time,end_time,hours_worked,work_description,plans_for_tomorrow,site_id,user_id,users(name)",
+                "order": "work_date.desc,start_time.desc"
+            }
+
+            # Apply tenant filter
+            if tenant_id and not is_super_admin:
+                params["tenant_id"] = f"eq.{tenant_id}"
+            elif tenant_id and is_super_admin:
+                params["tenant_id"] = f"eq.{tenant_id}"
+
+            # Apply site filter if provided
+            if site_id:
+                params["site_id"] = f"eq.{site_id}"
+
+            # Apply date filter
+            if start_date and end_date:
+                params["and"] = f"(work_date.gte.{start_date},work_date.lte.{end_date})"
+            elif start_date:
+                params["work_date"] = f"gte.{start_date}"
+            elif end_date:
+                params["work_date"] = f"lte.{end_date}"
+
+            # Fetch timesheets
+            response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/timesheets",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params=params
+            )
+
+            logger.info(f"Fetching timesheets by site: {response.status_code}, params: {params}")
+
+            if response.status_code != 200:
+                logger.error(f"Supabase error: {response.status_code} - {response.text}")
+                return {"success": False, "error": f"Failed to fetch timesheets: {response.text}"}
+
+            timesheets = response.json()
+            logger.info(f"Found {len(timesheets)} timesheets")
+
+            # Fetch site names from entities table
+            site_ids = list(set(entry.get("site_id") for entry in timesheets if entry.get("site_id")))
+            site_names = {}
+
+            if site_ids:
+                sites_response = await client.get(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/entities",
+                    headers={
+                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                    },
+                    params={
+                        "id": f"in.({','.join(site_ids)})",
+                        "select": "id,name"
+                    }
+                )
+
+                if sites_response.status_code == 200:
+                    site_names = {site["id"]: site["name"] for site in sites_response.json()}
+
+            # Group timesheets by site
+            site_data = {}
+            for entry in timesheets:
+                entry_site_id = entry.get("site_id")
+                if not entry_site_id:
+                    entry_site_id = "no_site"
+                    site_name = "No Site Assigned"
+                else:
+                    site_name = site_names.get(entry_site_id, "Unknown Site")
+
+                # Enrich entry with site name
+                entry["site_name"] = site_name
+
+                # Group by site
+                if entry_site_id not in site_data:
+                    site_data[entry_site_id] = {
+                        "site_id": entry_site_id,
+                        "site_name": site_name,
+                        "total_hours": 0,
+                        "entry_count": 0,
+                        "user_count": set(),
+                        "days_worked": set(),
+                        "entries": []
+                    }
+
+                site_data[entry_site_id]["total_hours"] += entry["hours_worked"]
+                site_data[entry_site_id]["entry_count"] += 1
+                site_data[entry_site_id]["user_count"].add(entry["user_id"])
+                site_data[entry_site_id]["days_worked"].add(entry["work_date"])
+                site_data[entry_site_id]["entries"].append(entry)
+
+            # Convert to list and format
+            site_list = []
+            for site_info in site_data.values():
+                site_list.append({
+                    "site_id": site_info["site_id"],
+                    "site_name": site_info["site_name"],
+                    "total_hours": round(site_info["total_hours"], 2),
+                    "entry_count": site_info["entry_count"],
+                    "user_count": len(site_info["user_count"]),
+                    "days_worked": len(site_info["days_worked"]),
+                    "avg_hours_per_day": round(site_info["total_hours"] / len(site_info["days_worked"]), 2) if site_info["days_worked"] else 0,
+                    "entries": site_info["entries"]
+                })
+
+            # Sort by total hours descending
+            site_list.sort(key=lambda x: x["total_hours"], reverse=True)
+
+            # Overall stats
+            total_hours = sum(e["hours_worked"] for e in timesheets)
+            total_sites = len(site_data)
+            total_entries = len(timesheets)
+
+            return {
+                "success": True,
+                "view": "by_site",
+                "summary": {
+                    "total_hours": round(total_hours, 2),
+                    "total_sites": total_sites,
+                    "total_entries": total_entries,
+                    "avg_hours_per_site": round(total_hours / total_sites, 2) if total_sites > 0 else 0
+                },
+                "site_summary": site_list,
+                "entries": timesheets
+            }
+
+    except Exception as e:
+        logger.error(f"Error fetching timesheets by site: {e}")
         return {"success": False, "error": str(e)}
 
 @router.get("/admin/reports/voice-notes", response_class=HTMLResponse)

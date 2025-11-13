@@ -38,6 +38,13 @@
         >
             Individual User
         </a>
+        <a
+            class="tab"
+            :class="{ 'tab-active': view === 'by_site' }"
+            @click="switchView('by_site')"
+        >
+            By Site
+        </a>
     </div>
 
     <!-- Filters -->
@@ -100,17 +107,20 @@
                     </select>
                 </div>
 
-                <!-- Site Filter -->
-                <div class="form-control" x-show="sites.length > 0">
+                <!-- Site Filter (show for by_site view) -->
+                <div class="form-control" x-show="view === 'by_site'" x-cloak>
                     <label class="label">
                         <span class="label-text">Filter by Site</span>
                     </label>
-                    <select class="select select-bordered select-sm" x-model="selectedSiteId">
+                    <select class="select select-bordered select-sm" x-model="selectedSiteId" @change="loadData()">
                         <option value="">All Sites</option>
                         <template x-for="site in sites" :key="site.id">
                             <option :value="site.id" x-text="site.name"></option>
                         </template>
                     </select>
+                    <label class="label" x-show="sites.length === 0">
+                        <span class="label-text-alt text-warning">No sites available</span>
+                    </label>
                 </div>
             </div>
 
@@ -141,11 +151,12 @@
             <div class="stat-title">Total Hours</div>
             <div class="stat-value text-primary" x-text="data?.summary?.total_hours || 0"></div>
             <div class="stat-desc" x-show="view === 'all_users'" x-text="'Across ' + (data?.summary?.total_users || 0) + ' users'"></div>
+            <div class="stat-desc" x-show="view === 'by_site'" x-text="'Across ' + (data?.summary?.total_sites || 0) + ' sites'"></div>
         </div>
 
         <div class="stat bg-base-100 shadow-lg rounded-lg">
-            <div class="stat-title" x-text="view === 'all_users' ? 'Total Users' : 'Days Worked'"></div>
-            <div class="stat-value text-secondary" x-text="view === 'all_users' ? (data?.summary?.total_users || 0) : (data?.summary?.days_worked || 0)"></div>
+            <div class="stat-title" x-text="view === 'all_users' ? 'Total Users' : (view === 'by_site' ? 'Total Sites' : 'Days Worked')"></div>
+            <div class="stat-value text-secondary" x-text="view === 'all_users' ? (data?.summary?.total_users || 0) : (view === 'by_site' ? (data?.summary?.total_sites || 0) : (data?.summary?.days_worked || 0))"></div>
         </div>
 
         <div class="stat bg-base-100 shadow-lg rounded-lg">
@@ -154,8 +165,8 @@
         </div>
 
         <div class="stat bg-base-100 shadow-lg rounded-lg">
-            <div class="stat-title" x-text="view === 'all_users' ? 'Avg Hours/User' : 'Avg Hours/Day'"></div>
-            <div class="stat-value text-info" x-text="view === 'all_users' ? (data?.summary?.avg_hours_per_user || 0) : (data?.summary?.avg_hours_per_day || 0)"></div>
+            <div class="stat-title" x-text="view === 'all_users' ? 'Avg Hours/User' : (view === 'by_site' ? 'Avg Hours/Site' : 'Avg Hours/Day')"></div>
+            <div class="stat-value text-info" x-text="view === 'all_users' ? (data?.summary?.avg_hours_per_user || 0) : (view === 'by_site' ? (data?.summary?.avg_hours_per_site || 0) : (data?.summary?.avg_hours_per_day || 0))"></div>
         </div>
     </div>
 
@@ -263,6 +274,147 @@
                             </template>
                         </tbody>
                     </table>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- By Site View -->
+    <div x-show="view === 'by_site' && data && !loading" x-cloak>
+        <!-- Empty State -->
+        <div x-show="!data?.site_summary || data.site_summary.length === 0" class="text-center py-12 card bg-base-100 shadow-lg">
+            <svg xmlns="http://www.w3.org/2000/svg" class="h-16 w-16 mx-auto text-base-content/30 mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 21V5a2 2 0 00-2-2H7a2 2 0 00-2 2v16m14 0h2m-2 0h-5m-9 0H3m2 0h5M9 7h1m-1 4h1m4-4h1m-1 4h1m-5 10v-5a1 1 0 011-1h2a1 1 0 011 1v5m-4 0h4" />
+            </svg>
+            <p class="text-base-content/70 text-lg">No timesheet entries found for sites</p>
+            <p class="text-base-content/50 text-sm mt-2">Try adjusting your filters or date range</p>
+        </div>
+
+        <!-- Site Cards -->
+        <div x-show="data?.site_summary && data.site_summary.length > 0">
+            <!-- All Sites View (show top 5 entries per site) -->
+            <div x-show="!selectedSiteId" class="space-y-6">
+                <template x-for="site in data.site_summary" :key="site.site_id">
+                    <div class="card bg-base-100 shadow-lg">
+                        <div class="card-body">
+                            <!-- Site Header -->
+                            <div class="flex justify-between items-start mb-4">
+                                <div>
+                                    <h2 class="card-title text-xl" x-text="site.site_name"></h2>
+                                    <p class="text-base-content/60 text-sm mt-1">
+                                        <span x-text="site.total_hours + ' hours'"></span>
+                                        <span class="mx-2">•</span>
+                                        <span x-text="site.user_count + ' ' + (site.user_count === 1 ? 'worker' : 'workers')"></span>
+                                        <span class="mx-2">•</span>
+                                        <span x-text="site.days_worked + ' ' + (site.days_worked === 1 ? 'day' : 'days')"></span>
+                                    </p>
+                                </div>
+                                <div class="stats shadow">
+                                    <div class="stat p-4">
+                                        <div class="stat-title text-xs">Avg Hours/Day</div>
+                                        <div class="stat-value text-2xl text-primary" x-text="site.avg_hours_per_day"></div>
+                                    </div>
+                                </div>
+                            </div>
+
+                            <!-- Recent Entries (top 5) -->
+                            <div class="overflow-x-auto">
+                                <table class="table table-sm table-zebra">
+                                    <thead>
+                                        <tr>
+                                            <th>Date</th>
+                                            <th>User</th>
+                                            <th>Hours</th>
+                                            <th>Description</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody>
+                                        <template x-for="(entry, idx) in site.entries.slice(0, 5)" :key="entry.id">
+                                            <tr>
+                                                <td class="text-sm" x-text="formatDate(entry.work_date)"></td>
+                                                <td class="text-sm" x-text="entry.users?.name || 'Unknown'"></td>
+                                                <td>
+                                                    <div class="badge badge-sm" :class="getHoursBadgeClass(entry.hours_worked)" x-text="entry.hours_worked + ' hrs'"></div>
+                                                </td>
+                                                <td class="text-sm">
+                                                    <div class="max-w-xs truncate" x-text="entry.work_description"></div>
+                                                </td>
+                                            </tr>
+                                        </template>
+                                    </tbody>
+                                </table>
+                            </div>
+
+                            <!-- Show More button if there are more than 5 entries -->
+                            <div x-show="site.entries.length > 5" class="card-actions justify-end mt-4">
+                                <button
+                                    class="btn btn-sm btn-ghost"
+                                    @click="viewSiteDetails(site.site_id, site.site_name)"
+                                >
+                                    View All <span x-text="site.entry_count"></span> Entries →
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                </template>
+            </div>
+
+            <!-- Single Site View (show all entries) -->
+            <div x-show="selectedSiteId" class="card bg-base-100 shadow-lg">
+                <div class="card-body">
+                    <!-- Site Header with Back Button -->
+                    <div class="flex justify-between items-center mb-4">
+                        <div>
+                            <h2 class="card-title text-xl" x-text="data.site_summary[0]?.site_name || 'Site Details'"></h2>
+                            <p class="text-base-content/60 text-sm mt-1">
+                                <span x-text="data.summary.total_hours + ' hours'"></span>
+                                <span class="mx-2">•</span>
+                                <span x-text="data.summary.total_entries + ' ' + (data.summary.total_entries === 1 ? 'entry' : 'entries')"></span>
+                            </p>
+                        </div>
+                        <button
+                            class="btn btn-sm btn-ghost"
+                            @click="viewAllSites()"
+                        >
+                            ← Back to All Sites
+                        </button>
+                    </div>
+
+                    <!-- All Entries Table -->
+                    <div class="overflow-x-auto">
+                        <table class="table table-zebra">
+                            <thead>
+                                <tr>
+                                    <th>Date</th>
+                                    <th>User</th>
+                                    <th>Start Time</th>
+                                    <th>End Time</th>
+                                    <th>Hours</th>
+                                    <th>Description</th>
+                                    <th>Plans for Tomorrow</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <template x-for="entry in data.entries" :key="entry.id">
+                                    <tr>
+                                        <td x-text="formatDate(entry.work_date)"></td>
+                                        <td x-text="entry.users?.name || 'Unknown'"></td>
+                                        <td x-text="entry.start_time"></td>
+                                        <td x-text="entry.end_time"></td>
+                                        <td>
+                                            <div class="badge" :class="getHoursBadgeClass(entry.hours_worked)" x-text="entry.hours_worked + ' hrs'"></div>
+                                        </td>
+                                        <td>
+                                            <div class="max-w-xs truncate" x-text="entry.work_description"></div>
+                                        </td>
+                                        <td>
+                                            <div class="max-w-xs truncate" x-text="entry.plans_for_tomorrow || '-'"></div>
+                                        </td>
+                                    </tr>
+                                </template>
+                            </tbody>
+                        </table>
+                    </div>
                 </div>
             </div>
         </div>
@@ -398,16 +550,23 @@ function timesheetReport() {
                 }
 
                 // Build query params
-                const params = new URLSearchParams({
-                    view: this.view
-                });
+                const params = new URLSearchParams();
 
                 if (this.startDate) params.append('start_date', this.startDate);
                 if (this.endDate) params.append('end_date', this.endDate);
-                if (this.selectedUserId) params.append('user_id', this.selectedUserId);
-                if (this.selectedSiteId) params.append('site_id', this.selectedSiteId);
 
-                const response = await fetch(`/admin/reports/timesheets/data?${params}`, { headers });
+                // Choose endpoint based on view
+                let endpoint = '/admin/reports/timesheets/data';
+                if (this.view === 'by_site') {
+                    endpoint = '/admin/reports/timesheets/by-site';
+                    if (this.selectedSiteId) params.append('site_id', this.selectedSiteId);
+                } else {
+                    params.append('view', this.view);
+                    if (this.selectedUserId) params.append('user_id', this.selectedUserId);
+                    if (this.selectedSiteId) params.append('site_id', this.selectedSiteId);
+                }
+
+                const response = await fetch(`${endpoint}?${params}`, { headers });
                 const result = await response.json();
 
                 if (result.success) {
@@ -425,6 +584,14 @@ function timesheetReport() {
 
         switchView(newView) {
             this.view = newView;
+            // Clear user filter when switching away from individual view
+            if (newView !== 'individual') {
+                this.selectedUserId = '';
+            }
+            // Clear site filter when switching away from by_site view
+            if (newView !== 'by_site') {
+                this.selectedSiteId = '';
+            }
             this.loadData();
         },
 
@@ -438,6 +605,16 @@ function timesheetReport() {
         viewUserDetails(userId, userName) {
             this.view = 'individual';
             this.selectedUserId = userId;
+            this.loadData();
+        },
+
+        viewSiteDetails(siteId, siteName) {
+            this.selectedSiteId = siteId;
+            this.loadData();
+        },
+
+        viewAllSites() {
+            this.selectedSiteId = '';
             this.loadData();
         },
 
@@ -466,8 +643,22 @@ function timesheetReport() {
                 this.data.user_summary.forEach(user => {
                     csv += `"${user.user_name}",${user.total_hours},${user.days_worked},${user.avg_hours_per_day},${user.entry_count}\n`;
                 });
+            } else if (this.view === 'by_site') {
+                if (this.selectedSiteId) {
+                    // Export detailed entries for single site
+                    csv = 'Date,User,Site,Start Time,End Time,Hours,Description,Plans for Tomorrow\n';
+                    this.data.entries.forEach(entry => {
+                        csv += `"${entry.work_date}","${entry.users?.name || 'Unknown'}","${entry.site_name || 'Unknown Site'}","${entry.start_time}","${entry.end_time}",${entry.hours_worked},"${entry.work_description}","${entry.plans_for_tomorrow || ''}"\n`;
+                    });
+                } else {
+                    // Export site summary
+                    csv = 'Site Name,Total Hours,Users,Days Worked,Avg Hours/Day,Entries\n';
+                    this.data.site_summary.forEach(site => {
+                        csv += `"${site.site_name}",${site.total_hours},${site.user_count},${site.days_worked},${site.avg_hours_per_day},${site.entry_count}\n`;
+                    });
+                }
             } else {
-                // Export detailed entries
+                // Export detailed entries (individual view)
                 csv = 'Date,User,Site,Start Time,End Time,Hours,Description,Plans for Tomorrow\n';
                 this.data.entries.forEach(entry => {
                     csv += `"${entry.work_date}","${entry.users?.name || 'Unknown'}","${entry.site_name || 'Unknown Site'}","${entry.start_time}","${entry.end_time}",${entry.hours_worked},"${entry.work_description}","${entry.plans_for_tomorrow || ''}"\n`;
@@ -479,7 +670,8 @@ function timesheetReport() {
             const url = window.URL.createObjectURL(blob);
             const a = document.createElement('a');
             a.href = url;
-            a.download = `timesheets_${this.view}_${this.startDate}_to_${this.endDate}.csv`;
+            const siteFilter = this.selectedSiteId ? '_filtered' : '';
+            a.download = `timesheets_${this.view}${siteFilter}_${this.startDate}_to_${this.endDate}.csv`;
             a.click();
             window.URL.revokeObjectURL(url);
         }
