@@ -354,7 +354,7 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
                         "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
                     },
                     params={
-                        "select": "id,name,phone_number,role,is_active,created_at,tenants(name)",
+                        "select": "id,name,phone_number,email,role,is_active,created_at,tenants(name)",
                         "order": "created_at.desc",
                         "limit": "100"
                     }
@@ -362,10 +362,28 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
 
                 if response.status_code == 200:
                     users = response.json()
-                    # Add tenant name to each user
+                    # Add tenant name and fetch skills for each user
                     for user in users:
                         user["tenant_name"] = user.get("tenants", {}).get("name", "Unknown") if user.get("tenants") else "Unknown"
-                        user["skills"] = []  # Skip skills for now in all-users view
+
+                        # Fetch skills for this user
+                        skills_response = await client.get(
+                            f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
+                            headers={
+                                "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                                "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                            },
+                            params={
+                                "user_id": f"eq.{user['id']}",
+                                "is_enabled": "eq.true",
+                                "select": "skills(id,skill_key,name)"
+                            }
+                        )
+                        if skills_response.status_code == 200:
+                            skill_data = skills_response.json()
+                            user["skills"] = [{"id": s["skills"]["id"], "key": s["skills"]["skill_key"], "name": s["skills"]["name"]} for s in skill_data if s.get("skills")]
+                        else:
+                            user["skills"] = []
 
                     return {"success": True, "users": users, "is_super_admin": True}
                 else:
@@ -384,7 +402,7 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
                 },
                 params={
                     "tenant_id": f"eq.{tenant_id}",
-                    "select": "id,name,phone_number,role,is_active,created_at",
+                    "select": "id,name,phone_number,email,role,is_active,created_at",
                     "order": "created_at.desc"
                 }
             )
@@ -392,7 +410,7 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
             if response.status_code == 200:
                 users = response.json()
 
-                # Get skill counts for each user
+                # Get skill data for each user (with id, skill_key and name)
                 for user in users:
                     skills_response = await client.get(
                         f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
@@ -403,11 +421,12 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
                         params={
                             "user_id": f"eq.{user['id']}",
                             "is_enabled": "eq.true",
-                            "select": "skills(name)"
+                            "select": "skills(id,skill_key,name)"
                         }
                     )
                     if skills_response.status_code == 200:
-                        user["skills"] = [s["skills"]["name"] for s in skills_response.json() if s.get("skills")]
+                        skill_data = skills_response.json()
+                        user["skills"] = [{"id": s["skills"]["id"], "key": s["skills"]["skill_key"], "name": s["skills"]["name"]} for s in skill_data if s.get("skills")]
                     else:
                         user["skills"] = []
 
@@ -469,6 +488,284 @@ async def toggle_user_active(
 
     except Exception as e:
         logger.error(f"Error toggling user status: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.get("/admin/users/{user_id}/available-skills")
+async def get_available_skills_for_user(
+    user_id: str,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    """Get all available skills that user doesn't have yet"""
+    try:
+        async with httpx.AsyncClient() as client:
+            # Get all skills from system
+            all_skills_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={"select": "id,skill_key,name"}
+            )
+
+            # Get user's current skills
+            user_skills_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "is_enabled": "eq.true",
+                    "select": "skill_id"
+                }
+            )
+
+            if all_skills_response.status_code == 200 and user_skills_response.status_code == 200:
+                all_skills = all_skills_response.json()
+                user_skill_ids = {s["skill_id"] for s in user_skills_response.json()}
+
+                # Filter out skills user already has
+                available = [s for s in all_skills if s["id"] not in user_skill_ids]
+
+                return {"success": True, "skills": available}
+            else:
+                return {"success": False, "error": "Failed to fetch skills"}
+
+    except Exception as e:
+        logger.error(f"Error fetching available skills: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.post("/admin/users/{user_id}/skills/{skill_id}/add")
+async def add_skill_to_user(
+    user_id: str,
+    skill_id: str,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    """Add a skill to a user"""
+    try:
+        async with httpx.AsyncClient() as client:
+            # Check if relationship already exists (might be disabled)
+            check_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "skill_id": f"eq.{skill_id}"
+                }
+            )
+
+            if check_response.status_code == 200 and check_response.json():
+                # Relationship exists, just enable it
+                update_response = await client.patch(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
+                    headers={
+                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal"
+                    },
+                    params={
+                        "user_id": f"eq.{user_id}",
+                        "skill_id": f"eq.{skill_id}"
+                    },
+                    json={"is_enabled": True}
+                )
+
+                if update_response.status_code in [200, 204]:
+                    return {"success": True, "message": "Skill enabled"}
+                else:
+                    return {"success": False, "error": "Failed to enable skill"}
+            else:
+                # Create new relationship
+                import uuid
+                create_response = await client.post(
+                    f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
+                    headers={
+                        "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                        "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                        "Content-Type": "application/json",
+                        "Prefer": "return=minimal"
+                    },
+                    json={
+                        "id": str(uuid.uuid4()),
+                        "user_id": user_id,
+                        "skill_id": skill_id,
+                        "is_enabled": True
+                    }
+                )
+
+                if create_response.status_code in [200, 201]:
+                    return {"success": True, "message": "Skill added"}
+                else:
+                    logger.error(f"Failed to create user skill: {create_response.text}")
+                    return {"success": False, "error": "Failed to add skill"}
+
+    except Exception as e:
+        logger.error(f"Error adding skill to user: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.delete("/admin/users/{user_id}/skills/{skill_id}")
+async def remove_skill_from_user(
+    user_id: str,
+    skill_id: str,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    """Remove a skill from a user (soft delete - set is_enabled = false)"""
+    try:
+        async with httpx.AsyncClient() as client:
+            response = await client.patch(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=minimal"
+                },
+                params={
+                    "user_id": f"eq.{user_id}",
+                    "skill_id": f"eq.{skill_id}"
+                },
+                json={"is_enabled": False}
+            )
+
+            if response.status_code in [200, 204]:
+                return {"success": True, "message": "Skill removed"}
+            else:
+                return {"success": False, "error": "Failed to remove skill"}
+
+    except Exception as e:
+        logger.error(f"Error removing skill from user: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.put("/admin/users/{user_id}")
+async def update_user(
+    user_id: str,
+    request: Request,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    """Update user details (name, phone, email, role)"""
+    try:
+        body = await request.json()
+        name = body.get("name")
+        phone_number = body.get("phone_number")
+        email = body.get("email")
+        role = body.get("role")
+
+        if not name or not phone_number:
+            return {"success": False, "error": "Name and phone number are required"}
+
+        async with httpx.AsyncClient() as client:
+            update_data = {
+                "name": name,
+                "phone_number": phone_number,
+                "email": email if email else None,
+                "role": role if role else None
+            }
+
+            response = await client.patch(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation"
+                },
+                params={"id": f"eq.{user_id}"},
+                json=update_data
+            )
+
+            if response.status_code == 200:
+                updated_user = response.json()[0] if response.json() else None
+                return {"success": True, "user": updated_user}
+            else:
+                logger.error(f"Failed to update user: {response.text}")
+                return {"success": False, "error": "Failed to update user"}
+
+    except Exception as e:
+        logger.error(f"Error updating user: {e}")
+        return {"success": False, "error": str(e)}
+
+@router.post("/admin/users")
+async def create_user(
+    request: Request,
+    admin_user: dict = Depends(get_current_admin_user)
+):
+    """Create a new user"""
+    tenant_id = admin_user.get("tenant_id")
+
+    # Must have a specific tenant selected
+    if not tenant_id:
+        return {"success": False, "error": "Please select a specific tenant to add users"}
+
+    try:
+        body = await request.json()
+        name = body.get("name")
+        phone_number = body.get("phone_number")
+        email = body.get("email")
+        role = body.get("role", "User")
+
+        if not name or not phone_number:
+            return {"success": False, "error": "Name and phone number are required"}
+
+        # Validate phone number format (basic check)
+        if not phone_number.startswith("+"):
+            return {"success": False, "error": "Phone number must include country code (e.g., +1)"}
+
+        async with httpx.AsyncClient() as client:
+            # Check if phone number already exists for this tenant
+            check_response = await client.get(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
+                },
+                params={
+                    "tenant_id": f"eq.{tenant_id}",
+                    "phone_number": f"eq.{phone_number}"
+                }
+            )
+
+            if check_response.status_code == 200 and check_response.json():
+                return {"success": False, "error": "A user with this phone number already exists", "status": 409}
+
+            # Create new user
+            import uuid
+            user_data = {
+                "id": str(uuid.uuid4()),
+                "tenant_id": tenant_id,
+                "name": name,
+                "phone_number": phone_number,
+                "email": email if email else None,
+                "role": role,
+                "is_active": True  # New users are active by default
+            }
+
+            response = await client.post(
+                f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
+                headers={
+                    "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
+                    "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}",
+                    "Content-Type": "application/json",
+                    "Prefer": "return=representation"
+                },
+                json=user_data
+            )
+
+            if response.status_code in [200, 201]:
+                new_user = response.json()[0] if response.json() else None
+                logger.info(f"Created new user: {name} ({phone_number}) for tenant {tenant_id}")
+                return {"success": True, "user": new_user}
+            else:
+                logger.error(f"Failed to create user: {response.text}")
+                return {"success": False, "error": "Failed to create user"}
+
+    except Exception as e:
+        logger.error(f"Error creating user: {e}")
         return {"success": False, "error": str(e)}
 
 # ============================================

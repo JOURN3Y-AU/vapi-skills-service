@@ -3,77 +3,7 @@
 {% block title %}User Management{% endblock %}
 
 {% block content %}
-<div x-data="{
-    users: [],
-    loading: true,
-    error: null,
-    isAuthenticated: !!localStorage.getItem('admin_api_key'),
-    async loadUsers() {
-        if (!this.isAuthenticated) {
-            this.loading = false;
-            return;
-        }
-
-        try {
-            const headers = {
-                'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
-            };
-
-            // Add tenant ID header if selected (for super admin)
-            const tenantId = localStorage.getItem('selected_tenant_id');
-            if (tenantId) {
-                headers['X-Tenant-ID'] = tenantId;
-            }
-
-            const response = await fetch('/admin/users/data', { headers });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.success) {
-                    this.users = data.users;
-                } else {
-                    this.error = data.error || 'Failed to load users';
-                }
-            } else if (response.status === 401) {
-                localStorage.removeItem('admin_api_key');
-                window.location.reload();
-            } else {
-                this.error = 'Failed to load users';
-            }
-        } catch (err) {
-            this.error = 'Connection error. Please try again.';
-        } finally {
-            this.loading = false;
-        }
-    },
-    async toggleActive(userId, index) {
-        try {
-            const headers = {
-                'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
-            };
-
-            // Add tenant ID header if selected (for super admin)
-            const tenantId = localStorage.getItem('selected_tenant_id');
-            if (tenantId) {
-                headers['X-Tenant-ID'] = tenantId;
-            }
-
-            const response = await fetch(`/admin/users/${userId}/toggle-active`, {
-                method: 'POST',
-                headers
-            });
-
-            if (response.ok) {
-                const data = await response.json();
-                if (data.success) {
-                    this.users[index].is_active = data.is_active;
-                }
-            }
-        } catch (err) {
-            console.error('Failed to toggle user status:', err);
-        }
-    }
-}" x-init="loadUsers()">
+<div x-data="userManagement()" x-init="loadUsers()">
 
     <!-- Header -->
     <div class="mb-8 flex justify-between items-center">
@@ -81,10 +11,32 @@
             <h1 class="text-4xl font-bold">User Management</h1>
             <p class="text-base-content/70 mt-2">Manage your team members and their access</p>
         </div>
-        <button class="btn btn-primary" disabled>
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
-            Add User (Coming Soon)
-        </button>
+        <div class="flex items-center gap-2">
+            <button
+                class="btn btn-primary"
+                @click="openAddUserModal()"
+                :disabled="!canAddUsers"
+                :title="!canAddUsers ? 'Please select a specific tenant to add users' : 'Add new user'"
+            >
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-2" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" /></svg>
+                Add User
+            </button>
+            <template x-if="!canAddUsers">
+                <div class="tooltip tooltip-left" data-tip="Select a specific tenant to add users">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-warning" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    </svg>
+                </div>
+            </template>
+        </div>
+    </div>
+
+    <!-- Toast Notification -->
+    <div x-show="toast.show" x-transition
+         class="toast toast-top toast-end z-50">
+        <div class="alert" :class="toast.type === 'success' ? 'alert-success' : 'alert-error'">
+            <span x-text="toast.message"></span>
+        </div>
     </div>
 
     <!-- Not Authenticated State -->
@@ -120,47 +72,100 @@
                         </tr>
                     </thead>
                     <tbody>
-                        <template x-for="(user, index) in users" :key="user.id">
+                        <template x-for="(user, userIndex) in users" :key="user.id">
                             <tr>
                                 <td>
                                     <div class="font-bold" x-text="user.name"></div>
+                                    <template x-if="user.tenant_name">
+                                        <div class="text-sm opacity-50" x-text="user.tenant_name"></div>
+                                    </template>
                                 </td>
                                 <td x-text="user.phone_number"></td>
                                 <td>
                                     <span class="badge badge-ghost" x-text="user.role || 'User'"></span>
                                 </td>
                                 <td>
-                                    <template x-if="user.skills && user.skills.length > 0">
-                                        <div class="flex flex-wrap gap-1">
-                                            <template x-for="skill in user.skills" :key="skill">
-                                                <span class="badge badge-sm badge-primary" x-text="skill"></span>
+                                    <div class="flex flex-wrap gap-1 items-center">
+                                        <!-- Existing Skills -->
+                                        <template x-if="user.skills && user.skills.length > 0">
+                                            <template x-for="(skill, skillIndex) in user.skills" :key="skill.id">
+                                                <div class="badge badge-sm badge-primary gap-1 group">
+                                                    <span x-text="skill.name"></span>
+                                                    <button
+                                                        @click="removeSkill(userIndex, skill.id, skillIndex)"
+                                                        class="opacity-0 group-hover:opacity-100 hover:text-error transition-opacity"
+                                                        title="Remove skill"
+                                                    >
+                                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-3 w-3" viewBox="0 0 20 20" fill="currentColor">
+                                                            <path fill-rule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clip-rule="evenodd" />
+                                                        </svg>
+                                                    </button>
+                                                </div>
                                             </template>
+                                        </template>
+
+                                        <!-- Add Skill Dropdown -->
+                                        <div class="dropdown dropdown-end">
+                                            <button
+                                                tabindex="0"
+                                                class="btn btn-xs btn-circle btn-ghost"
+                                                @click="loadAvailableSkills(user.id, userIndex)"
+                                                title="Add skill"
+                                            >
+                                                <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4" />
+                                                </svg>
+                                            </button>
+                                            <ul tabindex="0" class="dropdown-content z-[1] menu p-2 shadow bg-base-100 rounded-box w-52 max-h-60 overflow-y-auto">
+                                                <template x-if="availableSkillsForUser[user.id] && availableSkillsForUser[user.id].length > 0">
+                                                    <template x-for="skill in availableSkillsForUser[user.id]" :key="skill.id">
+                                                        <li>
+                                                            <a @click="addSkill(userIndex, skill.id, skill.name)">
+                                                                <span x-text="skill.name"></span>
+                                                            </a>
+                                                        </li>
+                                                    </template>
+                                                </template>
+                                                <template x-if="!availableSkillsForUser[user.id] || availableSkillsForUser[user.id].length === 0">
+                                                    <li class="disabled"><a class="text-sm opacity-50">All skills assigned</a></li>
+                                                </template>
+                                            </ul>
                                         </div>
-                                    </template>
-                                    <template x-if="!user.skills || user.skills.length === 0">
-                                        <span class="text-base-content/50 text-sm">No skills assigned</span>
-                                    </template>
-                                </td>
-                                <td>
-                                    <span
-                                        class="badge"
-                                        :class="user.is_active ? 'badge-success' : 'badge-error'"
-                                        x-text="user.is_active ? 'Active' : 'Inactive'"
-                                    ></span>
-                                </td>
-                                <td>
-                                    <div class="flex gap-2">
-                                        <button
-                                            class="btn btn-sm"
-                                            :class="user.is_active ? 'btn-error' : 'btn-success'"
-                                            @click="toggleActive(user.id, index)"
-                                        >
-                                            <span x-text="user.is_active ? 'Deactivate' : 'Activate'"></span>
-                                        </button>
-                                        <button class="btn btn-sm btn-ghost" disabled>
-                                            Edit
-                                        </button>
+
+                                        <!-- No Skills Message -->
+                                        <template x-if="(!user.skills || user.skills.length === 0)">
+                                            <span class="text-base-content/50 text-sm ml-2">No skills assigned</span>
+                                        </template>
                                     </div>
+                                </td>
+                                <td>
+                                    <div class="flex items-center gap-2">
+                                        <input
+                                            type="checkbox"
+                                            class="toggle"
+                                            :class="user.is_active ? 'toggle-success' : 'toggle-error'"
+                                            :checked="user.is_active"
+                                            @change="toggleActive(userIndex)"
+                                            :disabled="user.toggling"
+                                        />
+                                        <span
+                                            class="text-sm font-medium"
+                                            :class="user.is_active ? 'text-success' : 'text-error'"
+                                            x-text="user.is_active ? 'Active' : 'Inactive'"
+                                        ></span>
+                                        <span x-show="user.toggling" class="loading loading-spinner loading-xs ml-2"></span>
+                                    </div>
+                                </td>
+                                <td>
+                                    <button
+                                        class="btn btn-sm btn-ghost"
+                                        @click="openEditModal(userIndex)"
+                                    >
+                                        <svg xmlns="http://www.w3.org/2000/svg" class="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M11 5H6a2 2 0 00-2 2v11a2 2 0 002 2h11a2 2 0 002-2v-5m-1.414-9.414a2 2 0 112.828 2.828L11.828 15H9v-2.828l8.586-8.586z" />
+                                        </svg>
+                                        Edit
+                                    </button>
                                 </td>
                             </tr>
                         </template>
@@ -180,5 +185,522 @@
             <p class="text-base-content/70 mt-2">There are no users in your tenant yet.</p>
         </div>
     </div>
+
+    <!-- Edit User Modal -->
+    <dialog x-ref="editModal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg">Edit User</h3>
+            <form @submit.prevent="saveUser" class="py-4">
+                <div class="form-control w-full mb-4">
+                    <label class="label">
+                        <span class="label-text">Name *</span>
+                    </label>
+                    <input
+                        type="text"
+                        x-model="editForm.name"
+                        class="input input-bordered w-full"
+                        required
+                    />
+                </div>
+
+                <div class="form-control w-full mb-4">
+                    <label class="label">
+                        <span class="label-text">Phone Number *</span>
+                    </label>
+                    <input
+                        type="tel"
+                        x-model="editForm.phone_number"
+                        class="input input-bordered w-full"
+                        placeholder="+1234567890"
+                        required
+                    />
+                    <label class="label">
+                        <span class="label-text-alt">Include country code (e.g., +1)</span>
+                    </label>
+                </div>
+
+                <div class="form-control w-full mb-4">
+                    <label class="label">
+                        <span class="label-text">Email Address</span>
+                    </label>
+                    <input
+                        type="email"
+                        x-model="editForm.email"
+                        class="input input-bordered w-full"
+                        placeholder="user@example.com"
+                    />
+                    <label class="label">
+                        <span class="label-text-alt">Optional - for notifications</span>
+                    </label>
+                </div>
+
+                <div class="form-control w-full mb-4">
+                    <label class="label">
+                        <span class="label-text">Role</span>
+                    </label>
+                    <input
+                        type="text"
+                        x-model="editForm.role"
+                        class="input input-bordered w-full"
+                        placeholder="e.g., Site Manager, Admin"
+                    />
+                </div>
+
+                <div class="modal-action">
+                    <button
+                        type="button"
+                        class="btn btn-ghost"
+                        @click="$refs.editModal.close()"
+                        :disabled="editForm.saving"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        class="btn btn-primary"
+                        :disabled="editForm.saving"
+                    >
+                        <span x-show="!editForm.saving">Save Changes</span>
+                        <span x-show="editForm.saving" class="loading loading-spinner loading-sm"></span>
+                    </button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
+        </form>
+    </dialog>
+
+    <!-- Add User Modal -->
+    <dialog x-ref="addUserModal" class="modal">
+        <div class="modal-box">
+            <h3 class="font-bold text-lg">Add New User</h3>
+            <form @submit.prevent="createUser" class="py-4">
+                <div class="form-control w-full mb-4">
+                    <label class="label">
+                        <span class="label-text">Name *</span>
+                    </label>
+                    <input
+                        type="text"
+                        x-model="addForm.name"
+                        class="input input-bordered w-full"
+                        placeholder="John Smith"
+                        required
+                    />
+                </div>
+
+                <div class="form-control w-full mb-4">
+                    <label class="label">
+                        <span class="label-text">Phone Number *</span>
+                    </label>
+                    <input
+                        type="tel"
+                        x-model="addForm.phone_number"
+                        class="input input-bordered w-full"
+                        placeholder="+1234567890"
+                        required
+                    />
+                    <label class="label">
+                        <span class="label-text-alt">Must include country code (e.g., +1 for US)</span>
+                    </label>
+                </div>
+
+                <div class="form-control w-full mb-4">
+                    <label class="label">
+                        <span class="label-text">Email Address</span>
+                    </label>
+                    <input
+                        type="email"
+                        x-model="addForm.email"
+                        class="input input-bordered w-full"
+                        placeholder="user@example.com"
+                    />
+                    <label class="label">
+                        <span class="label-text-alt">Optional - for notifications</span>
+                    </label>
+                </div>
+
+                <div class="form-control w-full mb-4">
+                    <label class="label">
+                        <span class="label-text">Role</span>
+                    </label>
+                    <input
+                        type="text"
+                        x-model="addForm.role"
+                        class="input input-bordered w-full"
+                        placeholder="e.g., Site Manager, Foreman, Admin"
+                    />
+                    <label class="label">
+                        <span class="label-text-alt">Optional - defaults to "User"</span>
+                    </label>
+                </div>
+
+                <div class="alert alert-info">
+                    <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-5 w-5" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+                    <span class="text-sm">User will be created as <strong>Active</strong>. You can assign skills after creation.</span>
+                </div>
+
+                <div class="modal-action">
+                    <button
+                        type="button"
+                        class="btn btn-ghost"
+                        @click="$refs.addUserModal.close(); resetAddForm()"
+                        :disabled="addForm.saving"
+                    >
+                        Cancel
+                    </button>
+                    <button
+                        type="submit"
+                        class="btn btn-primary"
+                        :disabled="addForm.saving"
+                    >
+                        <span x-show="!addForm.saving">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 mr-1 inline" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M18 9v3m0 0v3m0-3h3m-3 0h-3m-2-5a4 4 0 11-8 0 4 4 0 018 0zM3 20a6 6 0 0112 0v1H3v-1z" />
+                            </svg>
+                            Create User
+                        </span>
+                        <span x-show="addForm.saving" class="loading loading-spinner loading-sm"></span>
+                    </button>
+                </div>
+            </form>
+        </div>
+        <form method="dialog" class="modal-backdrop">
+            <button>close</button>
+        </form>
+    </dialog>
+
 </div>
+
+<script>
+function userManagement() {
+    return {
+        users: [],
+        loading: true,
+        error: null,
+        isAuthenticated: !!localStorage.getItem('admin_api_key'),
+        availableSkillsForUser: {},
+        toast: {
+            show: false,
+            message: '',
+            type: 'success' // 'success' or 'error'
+        },
+        editForm: {
+            userId: null,
+            userIndex: null,
+            name: '',
+            phone_number: '',
+            email: '',
+            role: '',
+            saving: false
+        },
+        addForm: {
+            name: '',
+            phone_number: '',
+            email: '',
+            role: '',
+            saving: false
+        },
+
+        get canAddUsers() {
+            // Can add users if a specific tenant is selected (not "All Tenants")
+            const tenantId = localStorage.getItem('selected_tenant_id');
+            return !!tenantId;
+        },
+
+        showToast(message, type = 'success') {
+            this.toast.message = message;
+            this.toast.type = type;
+            this.toast.show = true;
+            setTimeout(() => {
+                this.toast.show = false;
+            }, 3000);
+        },
+
+        getHeaders() {
+            const headers = {
+                'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
+            };
+
+            const tenantId = localStorage.getItem('selected_tenant_id');
+            if (tenantId) {
+                headers['X-Tenant-ID'] = tenantId;
+            }
+
+            return headers;
+        },
+
+        async loadUsers() {
+            if (!this.isAuthenticated) {
+                this.loading = false;
+                return;
+            }
+
+            try {
+                const response = await fetch('/admin/users/data', {
+                    headers: this.getHeaders()
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        this.users = data.users.map(u => ({...u, toggling: false}));
+                    } else {
+                        this.error = data.error || 'Failed to load users';
+                    }
+                } else if (response.status === 401) {
+                    localStorage.removeItem('admin_api_key');
+                    window.location.reload();
+                } else {
+                    this.error = 'Failed to load users';
+                }
+            } catch (err) {
+                this.error = 'Connection error. Please try again.';
+            } finally {
+                this.loading = false;
+            }
+        },
+
+        async toggleActive(userIndex) {
+            const user = this.users[userIndex];
+            user.toggling = true;
+
+            try {
+                const response = await fetch(`/admin/users/${user.id}/toggle-active`, {
+                    method: 'POST',
+                    headers: this.getHeaders()
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        this.users[userIndex].is_active = data.is_active;
+                        this.showToast(`User ${data.is_active ? 'activated' : 'deactivated'} successfully`);
+                    } else {
+                        this.showToast('Failed to update user status', 'error');
+                    }
+                } else {
+                    this.showToast('Failed to update user status', 'error');
+                }
+            } catch (err) {
+                this.showToast('Connection error', 'error');
+            } finally {
+                user.toggling = false;
+            }
+        },
+
+        async loadAvailableSkills(userId, userIndex) {
+            if (this.availableSkillsForUser[userId]) {
+                return; // Already loaded
+            }
+
+            try {
+                const response = await fetch(`/admin/users/${userId}/available-skills`, {
+                    headers: this.getHeaders()
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        this.availableSkillsForUser[userId] = data.skills;
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load available skills:', err);
+            }
+        },
+
+        async addSkill(userIndex, skillId, skillName) {
+            const user = this.users[userIndex];
+
+            try {
+                const response = await fetch(`/admin/users/${user.id}/skills/${skillId}/add`, {
+                    method: 'POST',
+                    headers: this.getHeaders()
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        // Add skill to user's skills array
+                        if (!this.users[userIndex].skills) {
+                            this.users[userIndex].skills = [];
+                        }
+                        this.users[userIndex].skills.push({
+                            id: skillId,
+                            name: skillName
+                        });
+
+                        // Remove from available skills
+                        if (this.availableSkillsForUser[user.id]) {
+                            this.availableSkillsForUser[user.id] =
+                                this.availableSkillsForUser[user.id].filter(s => s.id !== skillId);
+                        }
+
+                        this.showToast('Skill added successfully');
+                    } else {
+                        this.showToast('Failed to add skill', 'error');
+                    }
+                }
+            } catch (err) {
+                this.showToast('Connection error', 'error');
+            }
+        },
+
+        async removeSkill(userIndex, skillId, skillIndex) {
+            const user = this.users[userIndex];
+            const skill = user.skills[skillIndex];
+
+            try {
+                const response = await fetch(`/admin/users/${user.id}/skills/${skillId}`, {
+                    method: 'DELETE',
+                    headers: this.getHeaders()
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        // Remove skill from user's skills array
+                        this.users[userIndex].skills.splice(skillIndex, 1);
+
+                        // Add back to available skills
+                        if (this.availableSkillsForUser[user.id]) {
+                            this.availableSkillsForUser[user.id].push({
+                                id: skillId,
+                                name: skill.name
+                            });
+                        }
+
+                        this.showToast('Skill removed successfully');
+                    } else {
+                        this.showToast('Failed to remove skill', 'error');
+                    }
+                }
+            } catch (err) {
+                this.showToast('Connection error', 'error');
+            }
+        },
+
+        openEditModal(userIndex) {
+            const user = this.users[userIndex];
+            this.editForm = {
+                userId: user.id,
+                userIndex: userIndex,
+                name: user.name,
+                phone_number: user.phone_number,
+                email: user.email || '',
+                role: user.role || '',
+                saving: false
+            };
+            this.$refs.editModal.showModal();
+        },
+
+        async saveUser() {
+            this.editForm.saving = true;
+
+            try {
+                const response = await fetch(`/admin/users/${this.editForm.userId}`, {
+                    method: 'PUT',
+                    headers: {
+                        ...this.getHeaders(),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: this.editForm.name,
+                        phone_number: this.editForm.phone_number,
+                        email: this.editForm.email,
+                        role: this.editForm.role
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success && data.user) {
+                        // Update user in list (preserve skills)
+                        const currentSkills = this.users[this.editForm.userIndex].skills;
+                        this.users[this.editForm.userIndex] = {
+                            ...data.user,
+                            skills: currentSkills,
+                            toggling: false
+                        };
+
+                        this.$refs.editModal.close();
+                        this.showToast('User updated successfully');
+                    } else {
+                        this.showToast(data.error || 'Failed to update user', 'error');
+                    }
+                } else {
+                    this.showToast('Failed to update user', 'error');
+                }
+            } catch (err) {
+                this.showToast('Connection error', 'error');
+            } finally {
+                this.editForm.saving = false;
+            }
+        },
+
+        openAddUserModal() {
+            this.resetAddForm();
+            this.$refs.addUserModal.showModal();
+        },
+
+        resetAddForm() {
+            this.addForm = {
+                name: '',
+                phone_number: '',
+                email: '',
+                role: '',
+                saving: false
+            };
+        },
+
+        async createUser() {
+            this.addForm.saving = true;
+
+            try {
+                const response = await fetch('/admin/users', {
+                    method: 'POST',
+                    headers: {
+                        ...this.getHeaders(),
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        name: this.addForm.name,
+                        phone_number: this.addForm.phone_number,
+                        email: this.addForm.email,
+                        role: this.addForm.role || 'User'
+                    })
+                });
+
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success && data.user) {
+                        // Add new user to the list
+                        this.users.unshift({
+                            ...data.user,
+                            skills: [],
+                            toggling: false
+                        });
+
+                        this.$refs.addUserModal.close();
+                        this.resetAddForm();
+                        this.showToast('User created successfully!');
+                    } else {
+                        this.showToast(data.error || 'Failed to create user', 'error');
+                    }
+                } else if (response.status === 409) {
+                    // Phone number already exists
+                    this.showToast('A user with this phone number already exists', 'error');
+                } else {
+                    this.showToast('Failed to create user', 'error');
+                }
+            } catch (err) {
+                this.showToast('Connection error', 'error');
+            } finally {
+                this.addForm.saving = false;
+            }
+        }
+    };
+}
+</script>
 {% endblock %}
