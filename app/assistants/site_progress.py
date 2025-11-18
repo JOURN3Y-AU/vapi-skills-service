@@ -199,9 +199,9 @@ DO & DON'T SUMMARY
         """
         return {
             "provider": "openai",
-            "model": "gpt-4o",  # GPT-4o for better conversation handling
+            "model": "gpt-4o-mini",  # GPT-4o-mini for cost efficiency
             "temperature": 0.7,  # Balanced between consistent and natural
-            "maxTokens": 500,  # Reasonable response length
+            "maxTokens": 1500,  # Higher limit for detailed site updates
         }
 
     def get_voice_config(self) -> Dict:

@@ -7,32 +7,37 @@
     stats: null,
     loading: true,
     error: null,
-    isAuthenticated: !!localStorage.getItem('admin_api_key'),
+    currentUser: null,
+    async checkAuth() {
+        try {
+            const response = await fetch('/admin/auth/me');
+            if (response.ok) {
+                const data = await response.json();
+                this.currentUser = data.user;
+                return true;
+            } else {
+                return false;
+            }
+        } catch (err) {
+            return false;
+        }
+    },
     async loadStats() {
-        if (!this.isAuthenticated) {
-            this.loading = false;
+        // Check authentication first
+        const isAuth = await this.checkAuth();
+        if (!isAuth) {
+            window.location.href = '/admin/login';
             return;
         }
 
         try {
-            const headers = {
-                'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
-            };
-
-            // Add tenant ID header if selected (for super admin)
-            const tenantId = localStorage.getItem('selected_tenant_id');
-            if (tenantId) {
-                headers['X-Tenant-ID'] = tenantId;
-            }
-
-            const response = await fetch('/admin/dashboard/stats', { headers });
+            const response = await fetch('/admin/dashboard/stats');
 
             if (response.ok) {
                 const data = await response.json();
                 this.stats = data;
             } else if (response.status === 401) {
-                localStorage.removeItem('admin_api_key');
-                window.location.reload();
+                window.location.href = '/admin/login';
             } else {
                 this.error = 'Failed to load dashboard stats';
             }
@@ -50,33 +55,19 @@
         <p class="text-base-content/70 mt-2" x-show="stats" x-text="'Welcome to ' + (stats?.tenant_name || 'Admin Dashboard')"></p>
     </div>
 
-    <!-- Not Authenticated State -->
-    <div x-show="!isAuthenticated" x-cloak class="flex flex-col items-center justify-center min-h-[400px]">
-        <div class="text-center max-w-md">
-            <svg xmlns="http://www.w3.org/2000/svg" class="h-24 w-24 mx-auto text-base-content/30 mb-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-            </svg>
-            <h2 class="text-2xl font-bold mb-4">Authentication Required</h2>
-            <p class="text-base-content/70 mb-6">Please login with your API key to access the admin dashboard.</p>
-            <button class="btn btn-primary" onclick="auth_modal.showModal()">
-                Login Now
-            </button>
-        </div>
-    </div>
-
     <!-- Loading State -->
-    <div x-show="loading && isAuthenticated" class="flex justify-center items-center min-h-[400px]">
+    <div x-show="loading" class="flex justify-center items-center min-h-[400px]">
         <span class="loading loading-spinner loading-lg"></span>
     </div>
 
     <!-- Error State -->
-    <div x-show="error && isAuthenticated" x-cloak class="alert alert-error">
+    <div x-show="error" x-cloak class="alert alert-error">
         <svg xmlns="http://www.w3.org/2000/svg" class="stroke-current shrink-0 h-6 w-6" fill="none" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 14l2-2m0 0l2-2m-2 2l-2-2m2 2l2 2m7-2a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
         <span x-text="error"></span>
     </div>
 
     <!-- Stats Cards -->
-    <div x-show="stats && !loading && isAuthenticated" x-cloak>
+    <div x-show="stats && !loading" x-cloak>
         <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 mb-8">
             <!-- Users Card -->
             <div class="stat bg-base-100 shadow-lg rounded-box">

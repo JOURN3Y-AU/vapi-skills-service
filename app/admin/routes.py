@@ -1,7 +1,7 @@
 # app/admin/routes.py - Admin UI routes
 from fastapi import APIRouter, Request, Depends, HTTPException, Header
 from fastapi.templating import Jinja2Templates
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, RedirectResponse
 import httpx
 import os
 from typing import Optional
@@ -116,22 +116,52 @@ async def get_current_admin_user(
         raise HTTPException(status_code=500, detail="Authentication system error")
 
 # ============================================
+# LOGIN PAGE
+# ============================================
+
+@router.get("/admin/login", response_class=HTMLResponse)
+async def login_page(request: Request):
+    """Login page"""
+    # If already authenticated, redirect to dashboard
+    user_session = request.session.get("user")
+    if user_session:
+        return RedirectResponse(url="/admin", status_code=302)
+
+    return templates.TemplateResponse(
+        "auth/login.html",
+        {"request": request}
+    )
+
+# ============================================
 # DASHBOARD
 # ============================================
 
 @router.get("/admin", response_class=HTMLResponse)
 async def admin_dashboard(request: Request):
-    """Main admin dashboard - no auth required for initial view"""
+    """Main admin dashboard - redirects to login if not authenticated"""
+    # Check if authenticated
+    user_session = request.session.get("user")
+    if not user_session:
+        return RedirectResponse(url="/admin/login", status_code=302)
+
     return templates.TemplateResponse(
         "dashboard/index.html",
         {"request": request, "page_title": "Admin Dashboard"}
     )
 
+async def get_session_user(request: Request) -> dict:
+    """Get current user from session"""
+    user_session = request.session.get("user")
+    if not user_session:
+        raise HTTPException(status_code=401, detail="Not authenticated")
+    return user_session
+
 @router.get("/admin/dashboard/stats")
-async def get_dashboard_stats(admin_user: dict = Depends(get_current_admin_user)):
+async def get_dashboard_stats(request: Request):
     """Get dashboard statistics"""
-    tenant_id = admin_user.get("tenant_id")
-    is_super_admin = admin_user.get("is_super_admin", False)
+    user_session = await get_session_user(request)
+    tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
 
     # Super admin without tenant selected sees aggregate stats
     if is_super_admin and not tenant_id:
@@ -234,7 +264,7 @@ async def get_dashboard_stats(admin_user: dict = Depends(get_current_admin_user)
                     "voice_notes": notes_count,
                     "timesheet_entries": timesheet_count
                 },
-                "tenant_name": admin_user["tenant_name"]
+                "tenant_name": user_session.get("tenant_name", "Unknown")
             }
 
     except Exception as e:
@@ -254,10 +284,11 @@ async def list_tenants_page(request: Request):
     )
 
 @router.get("/admin/tenants/data")
-async def get_tenants_data(admin_user: dict = Depends(get_current_admin_user)):
+async def get_tenants_data(request: Request):
     """Get tenants data (HTMX endpoint)"""
-    tenant_id = admin_user.get("tenant_id")
-    is_super_admin = admin_user.get("is_super_admin", False)
+    user_session = await get_session_user(request)
+    tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
 
     try:
         async with httpx.AsyncClient() as client:
@@ -265,13 +296,13 @@ async def get_tenants_data(admin_user: dict = Depends(get_current_admin_user)):
             if is_super_admin:
                 if tenant_id:
                     # Viewing specific tenant
-                    params = {"id": f"eq.{tenant_id}", "select": "id,name,created_at,api_key"}
+                    params = {"id": f"eq.{tenant_id}", "select": "id,name,created_at,timezone"}
                 else:
                     # Viewing all tenants
-                    params = {"select": "id,name,created_at,api_key", "order": "created_at.desc"}
+                    params = {"select": "id,name,created_at,timezone", "order": "created_at.desc"}
             else:
                 # Regular tenant admin sees only their tenant
-                params = {"id": f"eq.{tenant_id}", "select": "id,name,created_at,api_key"}
+                params = {"id": f"eq.{tenant_id}", "select": "id,name,created_at,timezone"}
 
             response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/tenants",
@@ -309,9 +340,10 @@ async def list_users_page(request: Request):
     )
 
 @router.get("/admin/api/tenants-list")
-async def get_tenants_list(admin_user: dict = Depends(get_current_admin_user)):
+async def get_tenants_list(request: Request):
     """Get list of all tenants (for tenant switcher dropdown)"""
-    is_super_admin = admin_user.get("is_super_admin", False)
+    user_session = await get_session_user(request)
+    is_super_admin = user_session.get("role") == "super_admin"
 
     if not is_super_admin:
         return {"success": False, "error": "Unauthorized"}
@@ -338,10 +370,20 @@ async def get_tenants_list(admin_user: dict = Depends(get_current_admin_user)):
         return {"success": False, "error": str(e)}
 
 @router.get("/admin/users/data")
-async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
+async def get_users_data(
+    request: Request,
+    tenant_id: Optional[str] = None
+):
     """Get users data (HTMX endpoint)"""
-    tenant_id = admin_user.get("tenant_id")
-    is_super_admin = admin_user.get("is_super_admin", False)
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    # For tenant admins, always use their tenant_id
+    # For super admins, use the query parameter if provided, otherwise show all
+    if not is_super_admin:
+        tenant_id = session_tenant_id
+    # else: use the tenant_id from query params (can be None for "all tenants")
 
     # Super admin without tenant selected sees all users
     if is_super_admin and not tenant_id:
@@ -362,11 +404,15 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
 
                 if response.status_code == 200:
                     users = response.json()
-                    # Add tenant name and fetch skills for each user
+
+                    # Add tenant names
                     for user in users:
                         user["tenant_name"] = user.get("tenants", {}).get("name", "Unknown") if user.get("tenants") else "Unknown"
+                        user["skills"] = []  # Initialize
 
-                        # Fetch skills for this user
+                    # Batch fetch all skills for all users in ONE query
+                    if users:
+                        user_ids = [u["id"] for u in users]
                         skills_response = await client.get(
                             f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
                             headers={
@@ -374,16 +420,30 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
                                 "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
                             },
                             params={
-                                "user_id": f"eq.{user['id']}",
+                                "user_id": f"in.({','.join(user_ids)})",
                                 "is_enabled": "eq.true",
-                                "select": "skills(id,skill_key,name)"
+                                "select": "user_id,skills(id,skill_key,name)"
                             }
                         )
+
                         if skills_response.status_code == 200:
-                            skill_data = skills_response.json()
-                            user["skills"] = [{"id": s["skills"]["id"], "key": s["skills"]["skill_key"], "name": s["skills"]["name"]} for s in skill_data if s.get("skills")]
-                        else:
-                            user["skills"] = []
+                            all_skills = skills_response.json()
+                            # Group skills by user_id
+                            skills_by_user = {}
+                            for item in all_skills:
+                                if item.get("skills"):
+                                    user_id = item["user_id"]
+                                    if user_id not in skills_by_user:
+                                        skills_by_user[user_id] = []
+                                    skills_by_user[user_id].append({
+                                        "id": item["skills"]["id"],
+                                        "key": item["skills"]["skill_key"],
+                                        "name": item["skills"]["name"]
+                                    })
+
+                            # Assign skills to users
+                            for user in users:
+                                user["skills"] = skills_by_user.get(user["id"], [])
 
                     return {"success": True, "users": users, "is_super_admin": True}
                 else:
@@ -410,8 +470,13 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
             if response.status_code == 200:
                 users = response.json()
 
-                # Get skill data for each user (with id, skill_key and name)
+                # Initialize skills array for all users
                 for user in users:
+                    user["skills"] = []
+
+                # Batch fetch all skills for all users in ONE query
+                if users:
+                    user_ids = [u["id"] for u in users]
                     skills_response = await client.get(
                         f"{os.getenv('SUPABASE_URL')}/rest/v1/user_skills",
                         headers={
@@ -419,16 +484,30 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
                             "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
                         },
                         params={
-                            "user_id": f"eq.{user['id']}",
+                            "user_id": f"in.({','.join(user_ids)})",
                             "is_enabled": "eq.true",
-                            "select": "skills(id,skill_key,name)"
+                            "select": "user_id,skills(id,skill_key,name)"
                         }
                     )
+
                     if skills_response.status_code == 200:
-                        skill_data = skills_response.json()
-                        user["skills"] = [{"id": s["skills"]["id"], "key": s["skills"]["skill_key"], "name": s["skills"]["name"]} for s in skill_data if s.get("skills")]
-                    else:
-                        user["skills"] = []
+                        all_skills = skills_response.json()
+                        # Group skills by user_id
+                        skills_by_user = {}
+                        for item in all_skills:
+                            if item.get("skills"):
+                                user_id = item["user_id"]
+                                if user_id not in skills_by_user:
+                                    skills_by_user[user_id] = []
+                                skills_by_user[user_id].append({
+                                    "id": item["skills"]["id"],
+                                    "key": item["skills"]["skill_key"],
+                                    "name": item["skills"]["name"]
+                                })
+
+                        # Assign skills to users
+                        for user in users:
+                            user["skills"] = skills_by_user.get(user["id"], [])
 
                 return {"success": True, "users": users}
             else:
@@ -441,25 +520,28 @@ async def get_users_data(admin_user: dict = Depends(get_current_admin_user)):
 @router.post("/admin/users/{user_id}/toggle-active")
 async def toggle_user_active(
     user_id: str,
-    admin_user: dict = Depends(get_current_admin_user)
+    request: Request
 ):
     """Toggle user active status (HTMX endpoint)"""
-    tenant_id = admin_user["tenant_id"]
+    user_session = await get_session_user(request)
+    tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
 
     try:
         async with httpx.AsyncClient() as client:
             # Get current status
+            params = {"id": f"eq.{user_id}", "select": "is_active"}
+            # Only filter by tenant_id if user is not super admin
+            if not is_super_admin and tenant_id:
+                params["tenant_id"] = f"eq.{tenant_id}"
+
             get_response = await client.get(
                 f"{os.getenv('SUPABASE_URL')}/rest/v1/users",
                 headers={
                     "apikey": os.getenv('SUPABASE_SERVICE_KEY'),
                     "Authorization": f"Bearer {os.getenv('SUPABASE_SERVICE_KEY')}"
                 },
-                params={
-                    "id": f"eq.{user_id}",
-                    "tenant_id": f"eq.{tenant_id}",
-                    "select": "is_active"
-                }
+                params=params
             )
 
             if get_response.status_code != 200 or not get_response.json():
@@ -493,9 +575,10 @@ async def toggle_user_active(
 @router.get("/admin/users/{user_id}/available-skills")
 async def get_available_skills_for_user(
     user_id: str,
-    admin_user: dict = Depends(get_current_admin_user)
+    request: Request
 ):
     """Get all available skills that user doesn't have yet"""
+    user_session = await get_session_user(request)
     try:
         async with httpx.AsyncClient() as client:
             # Get all skills from system
@@ -541,9 +624,10 @@ async def get_available_skills_for_user(
 async def add_skill_to_user(
     user_id: str,
     skill_id: str,
-    admin_user: dict = Depends(get_current_admin_user)
+    request: Request
 ):
     """Add a skill to a user"""
+    user_session = await get_session_user(request)
     try:
         async with httpx.AsyncClient() as client:
             # Check if relationship already exists (might be disabled)
@@ -613,8 +697,9 @@ async def add_skill_to_user(
 async def remove_skill_from_user(
     user_id: str,
     skill_id: str,
-    admin_user: dict = Depends(get_current_admin_user)
+    request: Request
 ):
+    user_session = await get_session_user(request)
     """Remove a skill from a user (soft delete - set is_enabled = false)"""
     try:
         async with httpx.AsyncClient() as client:
@@ -645,10 +730,10 @@ async def remove_skill_from_user(
 @router.put("/admin/users/{user_id}")
 async def update_user(
     user_id: str,
-    request: Request,
-    admin_user: dict = Depends(get_current_admin_user)
+    request: Request
 ):
     """Update user details (name, phone, email, role)"""
+    user_session = await get_session_user(request)
     try:
         body = await request.json()
         name = body.get("name")
@@ -692,11 +777,11 @@ async def update_user(
 
 @router.post("/admin/users")
 async def create_user(
-    request: Request,
-    admin_user: dict = Depends(get_current_admin_user)
+    request: Request
 ):
     """Create a new user"""
-    tenant_id = admin_user.get("tenant_id")
+    user_session = await get_session_user(request)
+    tenant_id = user_session.get("tenant_id")
 
     # Must have a specific tenant selected
     if not tenant_id:
@@ -781,10 +866,11 @@ async def list_sites_page(request: Request):
     )
 
 @router.get("/admin/sites/data")
-async def get_sites_data(admin_user: dict = Depends(get_current_admin_user)):
+async def get_sites_data(request: Request):
     """Get sites data from entities table"""
-    tenant_id = admin_user.get("tenant_id")
-    is_super_admin = admin_user.get("is_super_admin", False)
+    user_session = await get_session_user(request)
+    tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
 
     try:
         async with httpx.AsyncClient() as client:
@@ -836,16 +922,23 @@ async def timesheets_report_page(request: Request):
 
 @router.get("/admin/reports/timesheets/data")
 async def get_timesheets_data(
+    request: Request,
     view: str = "all_users",
     user_id: Optional[str] = None,
     site_id: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    admin_user: dict = Depends(get_current_admin_user)
+    tenant_id: Optional[str] = None  # Allow super admin to filter by tenant
 ):
     """Get timesheet data with filtering"""
-    tenant_id = admin_user.get("tenant_id")
-    is_super_admin = admin_user.get("is_super_admin", False)
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    # For tenant admins, always use their session tenant_id
+    # For super admins, use the query parameter if provided
+    if not is_super_admin:
+        tenant_id = session_tenant_id
 
     try:
         async with httpx.AsyncClient() as client:
@@ -856,10 +949,8 @@ async def get_timesheets_data(
                 "order": "work_date.desc,start_time.desc"
             }
 
-            # Apply tenant filter
-            if tenant_id and not is_super_admin:
-                params["tenant_id"] = f"eq.{tenant_id}"
-            elif tenant_id and is_super_admin:
+            # Apply tenant filter (always apply if tenant_id is set)
+            if tenant_id:
                 params["tenant_id"] = f"eq.{tenant_id}"
 
             # Apply additional filters
@@ -1008,14 +1099,21 @@ async def get_timesheets_data(
 
 @router.get("/admin/reports/timesheets/by-site")
 async def get_timesheets_by_site(
+    request: Request,
     site_id: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
-    admin_user: dict = Depends(get_current_admin_user)
+    tenant_id: Optional[str] = None  # Allow super admin to filter by tenant
 ):
     """Get timesheet data grouped by site"""
-    tenant_id = admin_user.get("tenant_id")
-    is_super_admin = admin_user.get("is_super_admin", False)
+    user_session = await get_session_user(request)
+    session_tenant_id = user_session.get("tenant_id")
+    is_super_admin = user_session.get("role") == "super_admin"
+
+    # For tenant admins, always use their session tenant_id
+    # For super admins, use the query parameter if provided
+    if not is_super_admin:
+        tenant_id = session_tenant_id
 
     try:
         async with httpx.AsyncClient() as client:
@@ -1025,10 +1123,8 @@ async def get_timesheets_by_site(
                 "order": "work_date.desc,start_time.desc"
             }
 
-            # Apply tenant filter
-            if tenant_id and not is_super_admin:
-                params["tenant_id"] = f"eq.{tenant_id}"
-            elif tenant_id and is_super_admin:
+            # Apply tenant filter (always apply if tenant_id is set)
+            if tenant_id:
                 params["tenant_id"] = f"eq.{tenant_id}"
 
             # Apply site filter if provided

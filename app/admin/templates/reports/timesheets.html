@@ -52,7 +52,26 @@
         <div class="card-body">
             <h2 class="card-title text-lg mb-4">Filters</h2>
 
-            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
+                <!-- Tenant Switcher (Super Admin Only) -->
+                <template x-if="currentUser?.role === 'super_admin'">
+                    <div class="form-control">
+                        <label class="label">
+                            <span class="label-text">Tenant</span>
+                        </label>
+                        <select
+                            class="select select-bordered select-sm"
+                            x-model="selectedTenantId"
+                            @change="onTenantChange()"
+                        >
+                            <option value="">All Tenants</option>
+                            <template x-for="tenant in availableTenants" :key="tenant.id">
+                                <option :value="tenant.id" x-text="tenant.name"></option>
+                            </template>
+                        </select>
+                    </div>
+                </template>
+
                 <!-- Date Range Presets -->
                 <div class="form-control">
                     <label class="label">
@@ -428,6 +447,9 @@ function timesheetReport() {
         loading: true,
         error: null,
         data: null,
+        currentUser: null,
+        selectedTenantId: null,
+        availableTenants: [],
 
         // Filters
         datePreset: 'this_week',
@@ -441,6 +463,9 @@ function timesheetReport() {
         sites: [],
 
         async init() {
+            // Check auth and load tenant info
+            await this.checkAuth();
+
             // Set default date range to this week (without auto-loading)
             this.applyDatePreset(false);
 
@@ -450,6 +475,58 @@ function timesheetReport() {
 
             // Load initial data once
             await this.loadData();
+        },
+
+        async checkAuth() {
+            try {
+                const response = await fetch('/admin/auth/me', {
+                    credentials: 'same-origin'
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    this.currentUser = data.user;
+                    // Set selectedTenantId from user's tenant or stored selection
+                    if (data.user.tenant_id) {
+                        this.selectedTenantId = data.user.tenant_id;
+                    } else if (data.user.role === 'super_admin') {
+                        this.selectedTenantId = localStorage.getItem('selected_tenant_id') || '';
+                        await this.loadTenants();
+                    }
+                } else {
+                    window.location.href = '/admin/login';
+                }
+            } catch (err) {
+                window.location.href = '/admin/login';
+            }
+        },
+
+        async loadTenants() {
+            try {
+                const response = await fetch('/admin/api/tenants-list', {
+                    credentials: 'same-origin'
+                });
+                if (response.ok) {
+                    const data = await response.json();
+                    if (data.success) {
+                        this.availableTenants = data.tenants;
+                    }
+                }
+            } catch (err) {
+                console.error('Failed to load tenants:', err);
+            }
+        },
+
+        onTenantChange() {
+            // Save selection to localStorage
+            if (this.selectedTenantId) {
+                localStorage.setItem('selected_tenant_id', this.selectedTenantId);
+            } else {
+                localStorage.removeItem('selected_tenant_id');
+            }
+            // Reload data with new tenant filter
+            this.loadUsers();
+            this.loadSites();
+            this.loadData();
         },
 
         applyDatePreset(shouldLoad = true) {
@@ -495,15 +572,15 @@ function timesheetReport() {
 
         async loadUsers() {
             try {
-                const headers = {
-                    'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
-                };
-                const tenantId = localStorage.getItem('selected_tenant_id');
-                if (tenantId) {
-                    headers['X-Tenant-ID'] = tenantId;
+                // Build URL with tenant_id query param if super admin and tenant selected
+                let url = '/admin/users/data';
+                if (this.currentUser?.role === 'super_admin' && this.selectedTenantId) {
+                    url += `?tenant_id=${this.selectedTenantId}`;
                 }
 
-                const response = await fetch('/admin/users/data', { headers });
+                const response = await fetch(url, {
+                    credentials: 'same-origin'
+                });
                 const result = await response.json();
 
                 if (result.success) {
@@ -516,15 +593,9 @@ function timesheetReport() {
 
         async loadSites() {
             try {
-                const headers = {
-                    'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
-                };
-                const tenantId = localStorage.getItem('selected_tenant_id');
-                if (tenantId) {
-                    headers['X-Tenant-ID'] = tenantId;
-                }
-
-                const response = await fetch('/admin/sites/data', { headers });
+                const response = await fetch('/admin/sites/data', {
+                    credentials: 'same-origin'
+                });
                 const result = await response.json();
 
                 if (result.success) {
@@ -541,16 +612,13 @@ function timesheetReport() {
             this.error = null;
 
             try {
-                const headers = {
-                    'Authorization': 'Bearer ' + localStorage.getItem('admin_api_key')
-                };
-                const tenantId = localStorage.getItem('selected_tenant_id');
-                if (tenantId) {
-                    headers['X-Tenant-ID'] = tenantId;
-                }
-
                 // Build query params
                 const params = new URLSearchParams();
+
+                // Add tenant_id if super admin and tenant selected
+                if (this.currentUser?.role === 'super_admin' && this.selectedTenantId) {
+                    params.append('tenant_id', this.selectedTenantId);
+                }
 
                 if (this.startDate) params.append('start_date', this.startDate);
                 if (this.endDate) params.append('end_date', this.endDate);
@@ -566,7 +634,9 @@ function timesheetReport() {
                     if (this.selectedSiteId) params.append('site_id', this.selectedSiteId);
                 }
 
-                const response = await fetch(`${endpoint}?${params}`, { headers });
+                const response = await fetch(`${endpoint}?${params}`, {
+                    credentials: 'same-origin'
+                });
                 const result = await response.json();
 
                 if (result.success) {

@@ -36,3 +36,7 @@ htmlcov/
 
 # Railway
 .railway/
+
+# Claude context file (contains project state for AI assistance)
+claude.md
+CLAUDE.md

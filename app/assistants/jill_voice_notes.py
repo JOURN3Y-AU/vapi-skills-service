@@ -109,10 +109,12 @@ Remember: You're helping capture important information quickly and accurately fo
         }
 
     def get_model_config(self) -> Dict:
-        """Model configuration for Jill (GPT-4)"""
+        """Model configuration for Jill (GPT-4o-mini for cost efficiency)"""
         return {
             "provider": "openai",
-            "model": "gpt-4"
+            "model": "gpt-4o-mini",
+            "temperature": 0.7,
+            "maxTokens": 1200
         }
 
     def get_required_tool_names(self) -> List[str]:

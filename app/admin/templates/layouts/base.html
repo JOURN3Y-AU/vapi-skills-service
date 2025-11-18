@@ -30,47 +30,31 @@
 <body class="bg-base-200">
     <!-- Navigation -->
     <div class="navbar bg-base-100 shadow-lg" x-data="{
-        apiKey: localStorage.getItem('admin_api_key') || '',
-        isAuthenticated: !!localStorage.getItem('admin_api_key'),
-        selectedTenantId: localStorage.getItem('selected_tenant_id') || '',
-        tenants: [],
-        isSuperAdmin: false,
-        get displayTenantName() {
-            if (!this.selectedTenantId) return 'All Tenants';
-            const tenant = this.tenants.find(t => t.id === this.selectedTenantId);
-            return tenant ? tenant.name : 'All Tenants';
-        },
-        async loadTenants() {
-            if (!this.isAuthenticated) return;
-
+        currentUser: null,
+        isAuthenticated: false,
+        async checkAuth() {
             try {
-                const response = await fetch('/admin/api/tenants-list', {
-                    headers: { 'Authorization': 'Bearer ' + this.apiKey }
-                });
+                const response = await fetch('/admin/auth/me');
                 if (response.ok) {
                     const data = await response.json();
-                    if (data.success) {
-                        this.tenants = data.tenants;
-                        this.isSuperAdmin = true;
-                        console.log('Super admin loaded, tenants:', this.tenants.length);
-                    }
+                    this.currentUser = data.user;
+                    this.isAuthenticated = true;
                 } else {
-                    console.log('Not super admin - API returned non-OK status');
+                    this.isAuthenticated = false;
                 }
             } catch (err) {
-                console.log('Not super admin or error loading tenants:', err);
+                this.isAuthenticated = false;
             }
         },
-        switchTenant(tenantId) {
-            this.selectedTenantId = tenantId;
-            if (tenantId === '' || tenantId === null) {
-                localStorage.removeItem('selected_tenant_id');
-            } else {
-                localStorage.setItem('selected_tenant_id', tenantId);
+        async logout() {
+            try {
+                await fetch('/admin/auth/logout', { method: 'POST' });
+                window.location.href = '/admin/login';
+            } catch (err) {
+                console.error('Logout error:', err);
             }
-            window.location.reload();
         }
-    }" x-init="loadTenants()">
+    }" x-init="checkAuth()">
         <div class="flex-1">
             <a href="/admin" class="btn btn-ghost normal-case flex items-center gap-2">
                 <img src="/static/images/journ3y-logo.png" alt="JOURN3Y" class="h-8 w-8" />
@@ -78,36 +62,38 @@
             </a>
         </div>
         <div class="flex-none gap-2 flex items-center">
-            <!-- Tenant Switcher (Super Admin Only) -->
-            <div class="flex items-center gap-2" x-show="isAuthenticated && isSuperAdmin" x-cloak>
-                <span class="text-xs text-base-content/70">Viewing:</span>
-                <select
-                    class="select select-bordered select-sm w-64"
-                    @change="switchTenant($event.target.value)"
-                >
-                    <option value="" :selected="!selectedTenantId || selectedTenantId === ''">🌐 All Tenants</option>
-                    <template x-for="tenant in tenants" :key="tenant.id">
-                        <option :value="tenant.id" :selected="tenant.id === selectedTenantId" x-text="'🏢 ' + tenant.name"></option>
-                    </template>
-                </select>
-            </div>
-
-            <!-- Login Button -->
+            <!-- Login Button (When Not Authenticated) -->
             <div x-show="!isAuthenticated" x-cloak>
-                <button class="btn btn-primary" onclick="auth_modal.showModal()">
+                <a href="/admin/login" class="btn btn-primary">
                     Login
-                </button>
+                </a>
             </div>
 
-            <!-- User Menu -->
+            <!-- User Menu Dropdown (When Authenticated) -->
             <div class="dropdown dropdown-end" x-show="isAuthenticated" x-cloak>
                 <label tabindex="0" class="btn btn-ghost btn-circle avatar placeholder">
-                    <div class="bg-neutral-focus text-neutral-content rounded-full w-10">
-                        <span class="text-xl">A</span>
+                    <div class="bg-primary text-primary-content rounded-full w-10">
+                        <span class="text-xl" x-text="currentUser?.email?.charAt(0).toUpperCase()"></span>
                     </div>
                 </label>
-                <ul tabindex="0" class="mt-3 z-[1] p-2 shadow menu menu-sm dropdown-content bg-base-100 rounded-box w-52">
-                    <li><a href="#" @click.prevent="localStorage.removeItem('admin_api_key'); localStorage.removeItem('selected_tenant_id'); window.location.reload()">Logout</a></li>
+                <ul tabindex="0" class="mt-3 z-[1] p-2 shadow menu menu-sm dropdown-content bg-base-100 rounded-box w-64">
+                    <!-- User Info Header -->
+                    <li class="menu-title">
+                        <div class="flex flex-col py-2">
+                            <span class="text-sm font-semibold" x-text="currentUser?.email"></span>
+                            <span class="text-xs text-base-content/60" x-text="currentUser?.role === 'super_admin' ? 'Super Admin' : 'Tenant Admin'"></span>
+                        </div>
+                    </li>
+                    <li><hr class="my-2" /></li>
+                    <!-- Logout -->
+                    <li>
+                        <a href="#" @click.prevent="logout()">
+                            <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
+                            </svg>
+                            Logout
+                        </a>
+                    </li>
                 </ul>
             </div>
         </div>
@@ -116,8 +102,18 @@
     <!-- Main Container -->
     <div class="flex">
         <!-- Sidebar -->
-        <aside class="w-64 min-h-screen bg-base-100 shadow-lg" x-data="{ isAuthenticated: !!localStorage.getItem('admin_api_key') }">
-            <ul class="menu p-4 gap-2" x-show="isAuthenticated">
+        <aside class="w-64 min-h-screen bg-base-100 shadow-lg" x-data="{
+            isAuthenticated: false,
+            async checkAuth() {
+                try {
+                    const response = await fetch('/admin/auth/me');
+                    this.isAuthenticated = response.ok;
+                } catch (err) {
+                    this.isAuthenticated = false;
+                }
+            }
+        }" x-init="checkAuth()">
+            <ul class="menu p-4 gap-2" x-show="isAuthenticated" x-cloak>
                 <li>
                     <a href="/admin" class="{% if request.url.path == '/admin' %}active{% endif %}">
                         <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 12l2-2m0 0l7-7 7 7M5 10v10a1 1 0 001 1h3m10-11l2 2m-2-2v10a1 1 0 01-1 1h-3m-6 0a1 1 0 001-1v-4a1 1 0 011-1h2a1 1 0 011 1v4a1 1 0 001 1m-6 0h6" /></svg>
@@ -165,93 +161,22 @@
         </main>
     </div>
 
-    <!-- Auth Modal -->
-    <dialog id="auth_modal" class="modal">
-        <div class="modal-box" x-data="{
-            apiKey: '',
-            error: '',
-            isLoading: false,
-            async login() {
-                this.error = '';
-                this.isLoading = true;
-
-                try {
-                    // Test the API key by fetching dashboard stats
-                    const response = await fetch('/admin/dashboard/stats', {
-                        headers: {
-                            'Authorization': 'Bearer ' + this.apiKey
-                        }
-                    });
-
-                    if (response.ok) {
-                        localStorage.setItem('admin_api_key', this.apiKey);
-                        window.location.reload();
-                    } else {
-                        this.error = 'Invalid API key';
-                    }
-                } catch (err) {
-                    this.error = 'Connection error. Please try again.';
-                } finally {
-                    this.isLoading = false;
-                }
-            }
-        }">
-            <h3 class="font-bold text-lg">Admin Login</h3>
-            <p class="py-4">Enter your tenant API key to access the admin dashboard.</p>
-
-            <div class="form-control w-full">
-                <label class="label">
-                    <span class="label-text">API Key</span>
-                </label>
-                <input
-                    type="password"
-                    placeholder="Enter your API key"
-                    class="input input-bordered w-full"
-                    x-model="apiKey"
-                    @keyup.enter="login()"
-                />
-                <label class="label" x-show="error">
-                    <span class="label-text-alt text-error" x-text="error"></span>
-                </label>
-            </div>
-
-            <div class="modal-action">
-                <form method="dialog">
-                    <button class="btn">Cancel</button>
-                </form>
-                <button class="btn btn-primary" @click="login()" :disabled="isLoading || !apiKey">
-                    <span x-show="!isLoading">Login</span>
-                    <span x-show="isLoading" class="loading loading-spinner"></span>
-                </button>
-            </div>
-        </div>
-        <form method="dialog" class="modal-backdrop">
-            <button>close</button>
-        </form>
-    </dialog>
-
     <!-- HTMX Config -->
     <script>
-        // Add auth header and tenant ID to all HTMX requests
+        // Add tenant ID header for super admin tenant switching (session auth uses cookies)
         document.body.addEventListener('htmx:configRequest', (event) => {
-            const apiKey = localStorage.getItem('admin_api_key');
-            if (apiKey) {
-                event.detail.headers['Authorization'] = 'Bearer ' + apiKey;
-            }
-
-            // Add tenant ID header for super admin tenant switching
+            // Session authentication is handled automatically via cookies
+            // Just add tenant ID header for super admin tenant switching
             const tenantId = localStorage.getItem('selected_tenant_id');
             if (tenantId) {
                 event.detail.headers['X-Tenant-ID'] = tenantId;
             }
         });
 
-        // Handle auth errors
+        // Handle auth errors - redirect to login page
         document.body.addEventListener('htmx:responseError', (event) => {
             if (event.detail.xhr.status === 401) {
-                localStorage.removeItem('admin_api_key');
-                localStorage.removeItem('selected_tenant_id');
-                auth_modal.showModal();
+                window.location.href = '/admin/login';
             }
         });
     </script>

@@ -3,6 +3,7 @@
 from fastapi import FastAPI, HTTPException, Depends, Header, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from starlette.middleware.sessions import SessionMiddleware
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 import httpx
@@ -103,9 +104,25 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+# Add Session middleware for admin authentication
+# Secret key should be in environment variable for production
+SESSION_SECRET_KEY = os.getenv("SESSION_SECRET_KEY", "change-me-in-production-use-random-string")
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=SESSION_SECRET_KEY,
+    session_cookie="admin_session",
+    max_age=8 * 60 * 60,  # 8 hours
+    same_site="lax",
+    https_only=os.getenv("ENVIRONMENT") == "production"
+)
+
 # ============================================
 # ADMIN INTERFACE
 # ============================================
+
+# Include admin authentication routes
+from app.admin.auth import router as auth_router
+app.include_router(auth_router)
 
 # Include admin router FIRST (before static mount)
 app.include_router(admin_router)

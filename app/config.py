@@ -32,6 +32,10 @@ class Settings(BaseSettings):
     # Testing
     TEST_DEFAULT_PHONE: Optional[str] = None
 
+    # Admin Interface
+    SUPER_ADMIN_API_KEY: Optional[str] = "super-admin-change-me"
+    SESSION_SECRET_KEY: Optional[str] = "change-me-in-production-use-random-string"
+
     @property
     def webhook_base_url(self) -> str:
         """
