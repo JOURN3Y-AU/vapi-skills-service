@@ -116,6 +116,13 @@ async def identify_site_for_timesheet(request: dict):
 
         logger.info(f"Identifying site for timesheet. Call: {vapi_call_id}, Input: {site_description}")
 
+        # Check if this is an overhead work request
+        overhead_keywords = [
+            'overhead', 'overheads', 'admin', 'office', 'general duties',
+            'general', 'paperwork', 'non-site', 'administration'
+        ]
+        is_overhead_request = any(keyword in site_description.lower() for keyword in overhead_keywords)
+
         # Get session context
         session_context = await get_session_context_by_call_id(vapi_call_id)
 
@@ -134,7 +141,52 @@ async def identify_site_for_timesheet(request: dict):
         tenant_id = session_context["tenant_id"]
 
         async with httpx.AsyncClient() as client:
-            # Get available sites for this tenant
+            # If this is an overhead work request, try to find the overhead site first
+            if is_overhead_request:
+                logger.info(f"Overhead work detected. Searching for overhead site for tenant {tenant_id}")
+                overhead_response = await client.get(
+                    f"{settings.SUPABASE_URL}/rest/v1/entities",
+                    headers={
+                        "apikey": settings.SUPABASE_SERVICE_KEY,
+                        "Authorization": f"Bearer {settings.SUPABASE_SERVICE_KEY}"
+                    },
+                    params={
+                        "tenant_id": f"eq.{tenant_id}",
+                        "entity_type": "eq.sites",
+                        "is_active": "eq.true",
+                        "select": "id,name,identifier,address,metadata"
+                    }
+                )
+
+                if overhead_response.status_code == 200:
+                    all_sites = overhead_response.json()
+                    # Find site with is_overhead metadata
+                    overhead_site = None
+                    for site in all_sites:
+                        metadata = site.get('metadata', {})
+                        if isinstance(metadata, dict) and metadata.get('is_overhead') == True:
+                            overhead_site = site
+                            break
+
+                    if overhead_site:
+                        logger.info(f"Found overhead site: {overhead_site['name']} ({overhead_site['id']})")
+                        return {
+                            "results": [{
+                                "toolCallId": tool_call_id,
+                                "result": {
+                                    "site_identified": True,
+                                    "site_id": overhead_site['id'],
+                                    "site_name": overhead_site['name'],
+                                    "confidence": "high",
+                                    "is_overhead": True,
+                                    "message": f"Got it! Logging time for {overhead_site['name']}. What time did you start?"
+                                }
+                            }]
+                        }
+                    else:
+                        logger.warning(f"No overhead site found for tenant {tenant_id}")
+
+            # Get available sites for this tenant (regular flow or fallback)
             sites_response = await client.get(
                 f"{settings.SUPABASE_URL}/rest/v1/entities",
                 headers={
@@ -569,7 +621,15 @@ async def get_recent_timesheets(request: dict):
         # Calculate date range
         from datetime import timedelta
         tz = pytz.timezone(tenant_timezone)
-        end_date = datetime.strptime(current_date, '%Y-%m-%d')
+
+        # If current_date is not available, calculate it from tenant timezone
+        if current_date:
+            end_date = datetime.strptime(current_date, '%Y-%m-%d')
+        else:
+            # Fallback: use current date in tenant timezone
+            end_date = datetime.now(tz)
+            logger.warning(f"current_date not in session context, using calculated date: {end_date.strftime('%Y-%m-%d')}")
+
         start_date = end_date - timedelta(days=days_back - 1)
 
         async with httpx.AsyncClient() as client:
