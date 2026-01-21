@@ -36,6 +36,19 @@ class Settings(BaseSettings):
     SUPER_ADMIN_API_KEY: Optional[str] = "super-admin-change-me"
     SESSION_SECRET_KEY: Optional[str] = "change-me-in-production-use-random-string"
 
+    # Salesforce (Journey Bank Demo)
+    SF_MOCK_MODE: bool = True  # Set to False to use real Salesforce
+    SF_INSTANCE_URL: Optional[str] = None
+    SF_USERNAME: Optional[str] = None
+    SF_PASSWORD: Optional[str] = None
+    SF_SECURITY_TOKEN: Optional[str] = None
+    SF_CLIENT_ID: Optional[str] = None
+    SF_CLIENT_SECRET: Optional[str] = None
+
+    # Resend Email (Journey Bank Demo)
+    RESEND_API_KEY: Optional[str] = None
+    RESEND_FROM_EMAIL: str = "noreply@journeybank.com.au"
+
     @property
     def webhook_base_url(self) -> str:
         """

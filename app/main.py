@@ -25,7 +25,9 @@ from app.skills.voice_notes import VoiceNotesSkill
 from app.skills.authentication import AuthenticationSkill
 from app.skills.site_updates import SiteUpdatesSkill
 from app.skills.timesheet import TimesheetSkill
+from app.skills.mortgage_status import MortgageStatusSkill
 from app.assistants import GreeterAssistant, JillVoiceNotesAssistant, SiteProgressAssistant, TimesheetAssistant
+from app.assistants.journey_bank_demo import JourneyBankDemoAssistant
 
 # NEW: Import admin interface
 from app.admin import admin_router
@@ -60,6 +62,9 @@ if os.getenv("VAPI_API_KEY"):
     timesheet_skill = TimesheetSkill()
     skill_registry.register_skill(timesheet_skill)
 
+    mortgage_status_skill = MortgageStatusSkill()
+    skill_registry.register_skill(mortgage_status_skill)
+
     # Register Assistants
     greeter_assistant = GreeterAssistant()
     skill_registry.register_assistant(greeter_assistant)
@@ -72,6 +77,9 @@ if os.getenv("VAPI_API_KEY"):
 
     timesheet_assistant = TimesheetAssistant()
     skill_registry.register_assistant(timesheet_assistant)
+
+    journey_bank_assistant = JourneyBankDemoAssistant()
+    skill_registry.register_assistant(journey_bank_assistant)
 
     # Register all skill routes with the app
     skill_registry.register_all_routes(app)

@@ -48,6 +48,7 @@ DO NOT SPEAK before this tool returns a result. Wait silently for the authentica
 For single skill (voice notes): "Hi [first_name], it's Jill! Ready to record a voice note?"
 For single skill (site progress): "Hi [first_name], it's Jill! Ready to log a site update?"
 For single skill (timesheet): "Hi [first_name], it's Jill! Ready to log your timesheet?"
+For single skill (mortgage status): "Hi [first_name], this is Jill from Journey Bank. For your protection, could you please provide your Broker Authentication Code?"
 For multiple skills: "Hi [first_name], it's Jill! I can help with [list their available skills naturally] - what would you like to do?"
 
 Examples for multiple skills:
@@ -64,6 +65,25 @@ IMPORTANT: Say the entire greeting in ONE message - do not split it into multipl
 - If single_skill_mode: The conversation will seamlessly transition to that skill
 - If multiple skills: Listen for their choice and route appropriately
 
+SPEECH RECOGNITION - UNDERSTANDING MISHEARD WORDS:
+The transcription system sometimes mishears words. When the user responds to your greeting,
+interpret these phonetic variants as the intended word:
+
+TIMESHEET variants (user wants to log time):
+• "parm shake", "pawn shake", "palm shake" → means "timesheet"
+• "tom shake", "tom sheets", "tonne sheets" → means "timesheet"
+• "time shift", "time shape" → means "timesheet"
+• Any word ending in "sheet" or "shake" after you offered timesheet → means "timesheet"
+
+VOICE NOTE variants:
+• "boys note", "voids note", "voice not" → means "voice note"
+
+SITE UPDATE variants:
+• "sight update", "side update" → means "site update"
+
+When you detect any of these variants, proceed confidently as if they said the correct word.
+Do NOT ask "did you mean timesheet?" - just proceed with the timesheet flow.
+
 CONVERSATION STYLE GUIDELINES
 • Speak naturally and conversationally
 • Be warm and friendly, but professional
@@ -76,11 +96,15 @@ DO & DON'T SUMMARY
 • Follow all steps in order
 • Use exact tool arguments
 • Be friendly, helpful, and thorough
+• Stay silent while tools are processing
+• Interpret misheard words using the variants list above
 
 ❌ DON'T:
 • Skip or reorder steps
-• Say "hold on" or "one moment" or "let me..."
-• Sound robotic or like a script"""
+• Say "hold on", "one moment", "give me a sec", "let me check", or any waiting phrases
+• Sound robotic or like a script
+• Announce that you're waiting for something
+• Ask "did you mean X?" when a phonetic variant is clearly one of the options you offered"""
 
     def get_first_message(self) -> str:
         """Empty string to trigger model-generated first message after authentication"""
@@ -105,6 +129,33 @@ DO & DON'T SUMMARY
             "temperature": 0.7,
             "maxTokens": 1200
         }
+
+    def get_transcriber_config(self) -> Dict:
+        """
+        Greeter-specific transcriber config with routing keyterms.
+
+        Override base config to add skill routing keyterms that users say
+        to choose which assistant they want (e.g., "timesheets", "voice notes").
+
+        Uses Nova-3 keyterm prompting (not keywords with intensifiers).
+        """
+        base_config = super().get_transcriber_config()
+
+        # Add greeter-specific routing keyterms
+        # Nova-3 keyterms: no intensifiers, supports multi-word phrases
+        routing_keyterms = [
+            # Skill routing phrases users commonly say
+            "log my timesheet",
+            "record a note",
+            "site update",
+            "help",
+            "options"
+        ]
+
+        # Merge with base keyterms
+        base_config["keyterm"] = base_config.get("keyterm", []) + routing_keyterms
+
+        return base_config
 
     def get_required_tool_names(self) -> List[str]:
         """Tools that the greeter needs"""
